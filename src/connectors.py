@@ -70,8 +70,11 @@ class SQLServerConnector:
         if not self.connection:
             raise RuntimeError("Not connected to SQL Server")
         cursor = self.connection.cursor()
-        cursor.execute(query)
-        return cursor.fetchall()
+        try:
+            cursor.execute(query)
+            return cursor.fetchall()
+        finally:
+            cursor.close()
     
     def __enter__(self):
         self.connect()
@@ -123,15 +126,18 @@ class PostgreSQLConnector:
         cursor.execute(query, params)
         self.connection.commit()
         return cursor
-    
+
     def fetch_results(self, query: str, params: Optional[tuple] = None):
         """Execute query and fetch results."""
         cursor = self.execute_query(query, params)
-        return cursor.fetchall()
-    
+        try:
+            return cursor.fetchall()
+        finally:
+            cursor.close()
+
     def __enter__(self):
         self.connect()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
