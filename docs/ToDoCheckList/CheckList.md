@@ -76,24 +76,24 @@ This is the project operating standard. It applies across any chat, tool session
 
 | Main task | Item task | Output / deliverable | Status | Confirm (Y/N) | Owner | Notes | Evidence | Dependencies |
 |---|---|---|---|---|---|---|---|---|
-| Source inventory | List major tables in Sales, Customer, Production, Purchasing | Source inventory list | Not started | N | AI / User | Need priority table list | SQL query results / doc | SQL Server access |
-| Source inventory | Review row counts and table sizes | Table size summary | Not started | N | AI / User | Use row counts and metadata | Query output / report | Source list |
-| Source inventory | Review schema for Sales, Customer, Production, Purchasing tables | Schema review notes | Not started | N | AI / User | Focus on key columns and types | Metadata query / notes | Source list |
-| Source inventory | Identify key fact tables and dimension tables | Fact/dimension shortlist | Not started | N | AI / User | Confirm business priority | Notes / mapping doc | Schema review |
-| Column profiling | Review table columns and types | Column profile summary | Not started | N | AI / User | Use SQL metadata views | SQL results / notebook | Source list |
-| Column profiling | Check null proportions and anomalies | Null/anomaly summary | Not started | N | AI / User | Flag suspicious patterns | Profiling output | Source tables |
-| Column profiling | Flag duplicate or inconsistent values | Data quality issues list | Not started | N | AI / User | Validate on key dimensions | Findings notes | Source tables |
-| Column profiling | Check date ranges and key patterns | Date range / key validation | Not started | N | AI / User | Focus on date fields and IDs | Query output | Source tables |
-| Relationship mapping | Map primary keys and foreign keys | PK/FK mapping | Not started | N | AI / User | Validate with metadata | Diagram / notes | Schema review |
-| Relationship mapping | Review joins between core tables | Join mapping notes | Not started | N | AI / User | Use likely business joins | Notes / SQL output | PK/FK map |
-| Relationship mapping | Document business relationships between entities | Business relationship summary | Not started | N | AI / User | Align with domain understanding | Notes doc | Join mapping |
-| Data dictionary | Create source-to-target mapping document | Source-to-target matrix | Not started | N | AI / User | Track business meaning and sources | Markdown / CSV | Source inventory |
-| Data dictionary | Create data dictionary for key tables | Key table dictionary | Not started | N | AI / User | Include description, types, usage | Markdown / doc | Profiling outputs |
-| Data dictionary | Document assumptions and business rules | Assumptions log | Not started | N | AI / User | Keep explicit and reviewable | Notes doc | Source understanding |
-| Deliverables | Prepare profiling scripts | Reusable SQL/Python scripts | Not started | N | AI / User | Keep execution-friendly | Script files | Profiling tasks |
-| Deliverables | Prepare schema inventory report | Inventory report | Not started | N | AI / User | Summarize findings | Markdown / report | Source inventory |
-| Deliverables | Prepare data dictionary document | Data dictionary doc | Not started | N | AI / User | Final business-facing version | Markdown / doc | Data dictionary |
-| Deliverables | Prepare source-to-target notes | Source-to-target notes | Not started | N | AI / User | Final review before Phase 2 | Notes doc | Mapping + dictionary |
+| Source inventory | List major tables in Sales, Customer, Production, Purchasing | Source inventory list | Done | Y | AI / User | Key AdventureWorks tables identified | SQL metadata + report | SQL Server access |
+| Source inventory | Review row counts and table sizes | Table size summary | Done | Y | AI / User | Row counts captured for Sales/Person/Production/Purchasing | Phase1_Data_Discovery_Report.md | Source list |
+| Source inventory | Review schema for Sales, Customer, Production, Purchasing tables | Schema review notes | Done | Y | AI / User | Main columns/types reviewed for key tables | Metadata query / report | Source list |
+| Source inventory | Identify key fact tables and dimension tables | Fact/dimension shortlist | Done | Y | AI / User | Sales orders, customer, product, purchase order, production work order identified | Report + data dictionary | Schema review |
+| Column profiling | Review table columns and types | Column profile summary | Done | Y | AI / User | Top business tables profiled with metadata columns | Report and script output | Source list |
+| Column profiling | Check null proportions and anomalies | Null/anomaly summary | In progress | N | AI / User | Next step: validate nulls on critical columns | Profiling output | Source tables |
+| Column profiling | Flag duplicate or inconsistent values | Data quality issues list | In progress | N | AI / User | Need targeted validation on customer/product keys | Findings notes | Source tables |
+| Column profiling | Check date ranges and key patterns | Date range / key validation | In progress | N | AI / User | Focus on date fields and IDs | Query output | Source tables |
+| Relationship mapping | Map primary keys and foreign keys | PK/FK mapping | Done | Y | AI / User | Relationship mapping captured from metadata | Phase1_Data_Discovery_Report.md | Schema review |
+| Relationship mapping | Review joins between core tables | Join mapping notes | Done | Y | AI / User | Base joins documented for sales, production, purchasing | Report / dictionary | PK/FK map |
+| Relationship mapping | Document business relationships between entities | Business relationship summary | Done | Y | AI / User | Relationship summary added to report | Report / notes doc | Join mapping |
+| Data dictionary | Create source-to-target mapping document | Source-to-target matrix | In progress | N | AI / User | Draft mapping exists in business context, to be formalized | Notes doc | Source inventory |
+| Data dictionary | Create data dictionary for key tables | Key table dictionary | Done | Y | AI / User | Data dictionary created for major entities | docs/data_dictionary_phase1.md | Profiling outputs |
+| Data dictionary | Document assumptions and business rules | Assumptions log | Done | Y | AI / User | Included in data dictionary | data_dictionary_phase1.md | Source understanding |
+| Deliverables | Prepare profiling scripts | Reusable SQL/Python scripts | Done | Y | AI / User | Script created for source profiling | scripts/validation/source_profile.py | Profiling tasks |
+| Deliverables | Prepare schema inventory report | Inventory report | Done | Y | AI / User | Inventory report generated | docs/Phase1_Data_Discovery_Report.md | Source inventory |
+| Deliverables | Prepare data dictionary document | Data dictionary doc | Done | Y | AI / User | Final draft generated | docs/data_dictionary_phase1.md | Data dictionary |
+| Deliverables | Prepare source-to-target notes | Source-to-target notes | In progress | N | AI / User | Final review before Phase 2 | Notes doc | Mapping + dictionary |
 
 ### Phase 1 exit criteria
 - Required source tables are inventoried
