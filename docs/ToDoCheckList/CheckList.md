@@ -137,45 +137,58 @@ This is the project operating standard. It applies across any chat, tool session
 
 ## Phase 3 — Domain 1: Sales Performance
 
----
+### Phase 3 task tracker
 
-## Phase 3 — Domain 1: Sales Performance
+| Main task | Item task | Output / deliverable | Status | Confirm (Y/N) | Owner | Notes | Evidence | Dependencies |
+|---|---|---|---|---|---|---|---|---|
+| Bronze extraction | Extract SalesOrderHeader from SQL Server | bronze.sales_order_header table (~31K rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze extraction | Extract SalesOrderDetail from SQL Server | bronze.sales_order_detail table (~121K rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze extraction | Extract Customer from SQL Server | bronze.customer table (~20K rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze extraction | Extract SalesTerritory from SQL Server | bronze.sales_territory table (~10 rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze extraction | Extract SalesPerson from SQL Server | bronze.sales_person table (~17 rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze extraction | Extract Product from Production schema | bronze.product table (~504 rows) | Not started | N | AI / User | Extract with pyodbc, add lineage metadata, validate row counts | scripts/ingestion/bronze/sales_bronze_load.py | SQL Server access |
+| Bronze loading | Load and validate all Bronze tables | 6 bronze tables with lineage metadata | Not started | N | AI / User | Validate row counts, data types, NULLs, add PK constraints | Validation report | Bronze extraction |
+| Bronze validation | Verify referential integrity in Bronze | Row count and NULL summary report | Not started | N | AI / User | Compare source vs Bronze counts; check critical column NULLs | phase3_bronze_validation.md | Bronze loading |
+| Silver transformation | Clean and standardize sales_order_header | silver.sales_order_header_clean table | Not started | N | AI / User | Standardize dates, amounts, remove duplicates, add computed columns | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver transformation | Clean and standardize sales_order_detail | silver.sales_order_detail_clean table | Not started | N | AI / User | Standardize names, calculate line_total and net_sales, join to header, deduplicate | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver transformation | Clean and standardize customer | silver.customer_clean table | Not started | N | AI / User | Standardize names, handle NULLs, deduplicate on CustomerID | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver transformation | Clean and standardize sales_territory | silver.sales_territory_clean table | Not started | N | AI / User | Trim names, standardize regions, deduplicate | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver transformation | Clean and standardize sales_person | silver.sales_person_clean table | Not started | N | AI / User | Join to person entity, standardize names, deduplicate | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver transformation | Clean and standardize product | silver.product_clean table | Not started | N | AI / User | Standardize product names, handle categories, deduplicate | scripts/transformation/silver/sales_silver_clean.py | Bronze tables |
+| Silver validation | Validate Silver layer quality | Deduplication and join validation report | Not started | N | AI / User | Check for unexpected row loss, NULL counts, join integrity | phase3_silver_validation.md | Silver transformation |
+| Gold dimensions | Build dim_date calendar dimension | gold.dim_date table (~8000 rows) | Not started | N | AI / User | Generate date range 2004-2025, add year/month/week/holiday flags, set PK index | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Phase 2 DDL |
+| Gold dimensions | Build dim_customer from Silver | gold.dim_customer table (~20K rows) | Not started | N | AI / User | Load from silver.customer_clean, set PK, add indexes on name and territory_id | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Silver tables |
+| Gold dimensions | Build dim_product from Silver | gold.dim_product table (~504 rows) | Not started | N | AI / User | Load from silver.product_clean, set PK, add indexes on name and category | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Silver tables |
+| Gold dimensions | Build dim_territory from Silver | gold.dim_territory table (~10 rows) | Not started | N | AI / User | Load from silver.sales_territory_clean, set PK, add index on name | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Silver tables |
+| Gold dimensions | Build dim_salesperson from Silver | gold.dim_salesperson table (~17 rows) | Not started | N | AI / User | Load from silver.sales_person_clean, set PK, add FK to territory, add name index | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Silver tables |
+| Gold fact table | Build fact_sales from Silver detail + header | gold.fact_sales table (~121K rows at line-item grain) | Not started | N | AI / User | Join detail+header, set grain to 1 row = 1 line item, add FKs to all dims, add indexes | scripts/warehouse/postgres/schema/04_create_sales_gold_schema.sql | Gold dimensions |
+| Gold validation | Verify fact table grain and integrity | Grain validation and FK referential check report | Not started | N | AI / User | Confirm fact row count = silver detail count, verify no orphaned FKs, test sample queries | phase3_gold_validation.md | Gold fact table |
+| KPI validation | Pre-calculate expected KPIs | KPI baseline values (revenue, AOV, counts) | Not started | N | AI / User | Run manual SQL on Gold tables; document baseline numbers for comparison | phase3_kpi_baseline.md | Gold tables |
+| KPI validation | Validate KPI calculations in Gold | KPI validation report (actual vs expected) | Not started | N | AI / User | Compare Gold KPI results to manual baseline; flag variances > 2% | phase3_kpi_validation.md | Gold fact/dims |
+| Power BI dashboard | Connect Power BI to PostgreSQL Gold layer | BI connection and data model | Not started | N | AI / User | Create PostgreSQL connection; import fact_sales and dimension tables | docs/reports/sales_performance_dashboard.pbix | Gold tables |
+| Power BI dashboard | Build sales performance dashboard | Dashboard with 8+ sales visualizations | Not started | N | AI / User | Add cards (revenue, orders, AOV), charts (by month/territory/product), tables (top customers) | docs/reports/sales_performance_dashboard.pbix | BI connection |
+| Power BI dashboard | Validate dashboard KPI metrics | Dashboard metrics validation checklist | Not started | N | AI / User | Compare Power BI numbers to SQL/Gold results; confirm alignment | phase3_dashboard_validation.md | BI dashboard |
+| Testing | Write unit tests for Gold layer | tests/test_sales_gold.py | Not started | N | AI / User | Test grain, FK integrity, measure logic, sample KPI calculations | tests/test_sales_gold.py | Gold tables |
+| Testing | Run test suite and document results | Test execution report with coverage | Not started | N | AI / User | pytest tests/test_sales_*.py; confirm all tests pass | Test results log | Unit tests |
+| Deliverables | Finalize Phase 3 documentation | phase3_analysis.md + phase3_implementation_checklist.md | Done | Y | AI / User | Analysis and task breakdown completed | docs/ToDoCheckList/Phase_3_Sales_Performance/ | Phase planning |
+| Code review | Peer review Phase 3 code | Code review approval | Not started | N | AI / User | Review scripts/, tests/, docs/ for quality, completeness, standards | PR review checklist | All code |
+| Merge | Merge feature branch to dev | Merge commit on dev branch | Not started | N | AI / User | Create PR, merge with --no-ff, delete remote branch | git log dev | Code review approved |
 
-### Source extraction
-- [ ] Extract SalesOrderHeader
-- [ ] Extract SalesOrderDetail
-- [ ] Extract Product
-- [ ] Extract Customer
-- [ ] Extract Territory
-- [ ] Extract SalesPerson
-
-### Bronze layer
-- [ ] Load raw sales tables into bronze
-- [ ] Add loading metadata
-- [ ] Validate source row counts
-
-### Silver layer
-- [ ] Clean sales data
-- [ ] Normalize date fields
-- [ ] Standardize names and categories
-- [ ] Handle nulls and duplicates
-- [ ] Join relevant entities
-
-### Gold layer
-- [ ] Build fact_sales
-- [ ] Build dim_product
-- [ ] Build dim_customer
-- [ ] Build dim_date
-- [ ] Build dim_territory
-- [ ] Build dim_salesperson
-- [ ] Validate grain and KPI logic
-
-### BI and validation
-- [ ] Connect Power BI to Gold layer
-- [ ] Create sales dashboard
-- [ ] Validate KPI numbers
-- [ ] Write unit tests
-- [ ] Merge feature branch into dev
+### Phase 3 exit criteria
+- All 6 Bronze source tables are extracted and loaded with metadata lineage (_source_system, _source_table, _load_date, _record_hash)
+- Bronze row counts match source exactly (100% validation)
+- All Bronze tables have primary key constraints and proper data types
+- All 6 Silver tables are cleaned, standardized, and deduplicated
+- Silver deduplication logic is validated (no unexpected row loss)
+- All 5 Gold dimension tables are built with proper indexes and primary keys
+- Gold fact_sales table is built at transaction-level grain (1 row = 1 sales order line item = 121K rows)
+- Referential integrity is validated (no orphaned foreign keys, all FK constraints pass)
+- All KPIs are calculated in Gold layer and validated against manual baseline (within ±2% tolerance)
+- Power BI dashboard is connected to Gold layer and displays correct metrics
+- Unit test suite passes with ≥80% code coverage
+- Code has been peer-reviewed and approved
+- Feature branch is merged to dev with --no-ff commit
+- All deliverables are stored in docs/ToDoCheckList/Phase_3_Sales_Performance/
 
 ---
 
