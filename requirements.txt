@@ -1,0 +1,28 @@
+# Core dependencies
+python-dotenv==1.1.1
+pandas==2.2.3
+numpy==2.1.3
+
+# Database connectors
+pyodbc==5.2.0
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Data processing
+openpyxl==3.1.5
+pyarrow==18.1.0
+
+# Logging and utilities
+python-logging-loki==0.3.1
+pydantic==2.8.2
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+
+# Development
+black==24.8.0
+flake8==7.1.1
+pylint==3.0.3
+mypy==1.11.2
+isort==5.13.2
