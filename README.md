@@ -15,9 +15,12 @@ Build a clean medallion-style warehouse solution around AdventureWorks data with
   - src/core/: connectivity, config, core logic
   - src/utils/: logger and helper utilities
 - scripts/: operational jobs and database assets
-  - scripts/db/: SQL setup scripts
-  - scripts/ingestion/: extraction and bronze ingestion scripts
-  - scripts/validation/: validation checks
+  - scripts/source/: source-system extraction and profiling scripts
+    - scripts/source/sqlserver/: SQL Server-specific profiling and extraction jobs
+  - scripts/ingestion/: ingestion jobs
+    - scripts/ingestion/bronze/: bronze ingestion scripts
+  - scripts/warehouse/: warehouse setup and database objects
+    - scripts/warehouse/postgres/: PostgreSQL warehouse schema and setup scripts
 - tests/: automation and validation tests
 - notebooks/: exploratory and analysis notebooks
 - config/: environment and configuration assets

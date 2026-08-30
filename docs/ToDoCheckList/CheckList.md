@@ -107,15 +107,35 @@ This is the project operating standard. It applies across any chat, tool session
 
 ## Phase 2 — Architecture & Spec Finalization
 
-- [ ] Finalize warehouse design
-- [ ] Define Bronze/Silver/Gold schemas
-- [ ] Create DDL scripts for warehouse tables
-- [ ] Define Gold star schema for Sales
-- [ ] Define Gold star schema for Customer
-- [ ] Define Gold star schema for Production / Inventory
-- [ ] Define Gold star schema for Purchasing / Supplier
-- [ ] Draw ERD or star schema diagrams
-- [ ] Validate architecture with business stakeholders
+### Phase 2 task tracker
+
+| Main task | Item task | Output / deliverable | Status | Confirm (Y/N) | Owner | Notes | Evidence | Dependencies |
+|---|---|---|---|---|---|---|---|---|
+| Warehouse architecture | Finalize source-to-target architecture | Architecture flow and layer design | Done | Y | AI / User | Source → Bronze → Silver → Gold → Power BI approved | phase2_architecture_spec.md | Phase 1 profiling results |
+| Warehouse architecture | Define Bronze / Silver / Gold responsibilities | Layer design notes | Done | Y | AI / User | Bronze raw retention, Silver cleaning, Gold KPI-ready model | Architecture spec | Source inventory |
+| Schema design | Define naming conventions | Naming standard for schemas and tables | Done | Y | AI / User | `bronze.*`, `silver.*`, `gold.fact_*`, `gold.dim_*` | Architecture spec | Layer design |
+| Schema design | Define Sales star schema | Sales fact + dimensions | Done | Y | AI / User | Fact sales plus customer/product/date/territory/salesperson dims | Architecture spec | Source relationships |
+| Schema design | Define Customer star schema | Customer fact + dimensions | Done | Y | AI / User | Fact customer orders and customer/date/product dimensions | Architecture spec | Source relationships |
+| Schema design | Define Production / Inventory schema | Production + inventory fact tables | Done | Y | AI / User | Fact production and fact inventory with dim product/location/date | Architecture spec | Source relationships |
+| Schema design | Define Purchasing / Supplier schema | Purchasing fact + dimensions | Done | Y | AI / User | Fact purchasing with vendor/product/date dims | Architecture spec | Source relationships |
+| Data modeling | Define grain for each fact table | Grain definition per domain | Done | Y | AI / User | Sales line-item, customer order event, inventory balance/movement, purchasing line-item | Architecture spec | Domain design |
+| Data modeling | Draw ERD / star schema diagram | Diagram and schema docs | Done | Y | AI / User | Phase 2 folder contains schema concept and star-schema notes | phase2_star_schema.md | Domain schema design |
+| DDL design | Create warehouse DDL scripts | PostgreSQL schema and table scripts | Done | Y | AI / User | Initial bronze/silver/gold DDL scripts created | scripts/schema/*.sql | Finalized architecture |
+| Validation | Validate architecture with stakeholders | Final architecture sign-off | Done | Y | AI / User | Architecture is approved for Phase 3 start | Phase 2 review documentation | Finalized design |
+
+### Phase 2 exit criteria
+- Source-to-target architecture is finalized and reviewed
+- Bronze / Silver / Gold responsibilities are clearly defined
+- Fact tables and dimension tables are mapped for all 4 domains
+- Grain for each fact table is explicitly documented
+- Naming convention is consistent across warehouse schemas and tables
+- ERD or star schema diagrams are created and stored in the Phase 2 folder
+- DDL scripts for warehouse objects are ready for execution in PostgreSQL
+- Architecture is approved before starting Phase 3 implementation
+
+---
+
+## Phase 3 — Domain 1: Sales Performance
 
 ---
 
