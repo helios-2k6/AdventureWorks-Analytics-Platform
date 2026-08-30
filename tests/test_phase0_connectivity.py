@@ -5,8 +5,8 @@ Phase 0 connectivity and foundation tests.
 """
 
 import pytest
-from src.connectors import SQLServerConnector, PostgreSQLConnector
-from scripts.bronze_ingest import bronze_ingest_table
+from src.core.connectors import SQLServerConnector, PostgreSQLConnector
+from scripts.ingestion.bronze_ingest import bronze_ingest_table
 
 
 class TestSQLServerConnectivity:

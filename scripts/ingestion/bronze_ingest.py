@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from src.connectors import PostgreSQLConnector, SQLServerConnector
+from src.core.connectors import PostgreSQLConnector, SQLServerConnector
 
 
 def bronze_ingest_table(source_table: str, source_system: str = "AdventureWorks2012") -> int:

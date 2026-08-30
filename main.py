@@ -5,9 +5,9 @@ Main module for the AdventureWorks Analytics Platform.
 """
 
 import logging
-from src.logger import setup_logging
-from src.connectors import SQLServerConnector, PostgreSQLConnector
-from src.config import PHASE0_TEST_TABLES
+from src.utils.logger import setup_logging
+from src.core.connectors import SQLServerConnector, PostgreSQLConnector
+from src.core.config import PHASE0_TEST_TABLES
 
 logger = setup_logging(__name__)
 
