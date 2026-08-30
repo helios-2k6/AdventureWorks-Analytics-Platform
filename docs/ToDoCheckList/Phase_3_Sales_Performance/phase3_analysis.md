@@ -360,6 +360,7 @@ docs/
 - [ ] All 5 Gold dimensions are built and indexed
 - [ ] Referential integrity is validated (no broken FKs)
 - [ ] All KPIs are calculated and validated against expectations
+- [ ] Power BI Desktop is installed and PostgreSQL connection configured
 - [ ] Power BI dashboard is connected and displays correct metrics
 - [ ] Unit tests pass for all transform steps
 - [ ] Code is peer-reviewed
@@ -367,19 +368,38 @@ docs/
 
 ---
 
-## 9. Next Steps (Immediate)
+## 9. Prerequisites & Dependencies
 
-1. **Create Phase 3 implementation checklist** with task breakdown and owners
-2. **Start Phase 3.1 — Bronze Extraction** with sales_extract.py script
-3. **Set up PostgreSQL Gold schema** (DDL already exists from Phase 2)
-4. **Establish KPI validation spreadsheet** for manual pre-calculation
-5. **Begin writing tests** alongside implementation
+### Required Tools
+- ✅ Python 3.8+ with pyodbc, psycopg2, pandas, sqlalchemy
+- ✅ SQL Server AdventureWorks2012 database (Phase 0)
+- ✅ PostgreSQL Docker container running (Phase 0)
+- ⚠️ **Power BI Desktop** — Required for Phase 3.4 (BI dashboard)
+  - If not installed, download from [Microsoft Power BI](https://powerbi.microsoft.com/en-us/desktop/)
+  - Need PostgreSQL ODBC driver for connection
+
+### Data Prerequisites
+- Phase 1: Source tables profiled and documented
+- Phase 2: Architecture and DDL scripts finalized
+- Bronze schemas created in PostgreSQL
+
+---
+
+## 10. Next Steps (Immediate)
+
+1. **Verify Power BI Desktop is installed** (required for 3.4)
+2. **Create Phase 3 implementation checklist** with task breakdown and owners
+3. **Start Phase 3.1 — Bronze Extraction** with sales_extract.py script
+4. **Set up PostgreSQL Gold schema** (DDL already exists from Phase 2)
+5. **Establish KPI validation spreadsheet** for manual pre-calculation
+6. **Begin writing tests** alongside implementation
 
 ---
 
 ## Appendix: Reference Links
 
-- [Phase 2 Architecture Spec](phase2_architecture_spec.md)
-- [Phase 2 Star Schema](phase2_star_schema.md)
+- [Phase 2 Architecture Spec](../Phase_2_Architecture_Spec_Finalization/phase2_architecture_spec.md)
+- [Phase 2 Star Schema](../Phase_2_Architecture_Spec_Finalization/phase2_star_schema.md)
 - [Project Checklist](../CheckList.md)
 - [Phase 1 Data Dictionary](../Phase_1_Data_Discovery_Profiling/Explain_To_Do.md)
+- [Phase 3 Implementation Checklist](phase3_implementation_checklist.md)
