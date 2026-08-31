@@ -1,4 +1,6 @@
 from datetime import datetime
+import hashlib
+import json
 from typing import Optional
 
 import pandas as pd
@@ -27,8 +29,16 @@ class SalesExtractor:
             finally:
                 cursor.close()
 
-        df = pd.DataFrame(rows, columns=columns)
+        normalized_rows = [tuple(row) for row in rows]
+        df = pd.DataFrame(normalized_rows, columns=columns)
         df["_source_system"] = self.source_system
         df["_source_table"] = full_table_name
         df["_load_date"] = load_date
+
+        def compute_record_hash(row: pd.Series) -> str:
+            payload = row.drop(labels=["_source_system", "_source_table", "_load_date"], errors="ignore").to_dict()
+            normalized = json.dumps(payload, default=str, sort_keys=True)
+            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+        df["_record_hash"] = df.apply(compute_record_hash, axis=1)
         return df

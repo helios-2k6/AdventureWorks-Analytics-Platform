@@ -8,7 +8,7 @@
 
 ### 3.1.1 Bronze Script Setup
 
-- [ ] Create `scripts/ingestion/bronze/sales_bronze_load.py`
+- [x] Create `scripts/ingestion/bronze/sales_bronze_load.py`
   - Import required libraries: pyodbc, psycopg2, sqlalchemy, logging
   - Create function: `get_sqlserver_connection()`
   - Create function: `get_postgres_connection()`
@@ -16,68 +16,58 @@
   - Create function: `add_lineage_metadata(df, source_table, load_date)` — add 4 cols
   - Create function: `load_to_bronze(df, bronze_table_name)` — write to PostgreSQL
 
-- [ ] Implement error handling and logging
+- [x] Implement error handling and logging
   - Log extract start/end times
   - Log row counts before/after
   - Log any extraction errors
-  - Log connection failures
+- [ ] Create `scripts/transformation/silver/sales_silver_clean.py`
+  - Import libraries: sqlalchemy, pandas, psycopg2, logging
+  - Create function: `connect_warehouse()` → PostgreSQL
+  - Create function: `clean_table(table_name, business_rules)` → SQL transforms
+  - Create function: `load_silver_table(sql_query, target_table)` → write to silver schema
+  - Create function: `validate_silver(table_name, row_count_before, row_count_after)` → QA
 
-### 3.1.2 Extract 6 Source Tables
+- [ ] Implement error handling and logging
+  - Log extract start/end times
+  - Log row counts before/after
+  - Log any transformation errors
+  - Log validation failures
 
-- [ ] Extract `Sales.SalesOrderHeader` → `bronze.sales_order_header`
-  - Expected: ~31K rows
-  - Validate: row count = source count
-  - Validate: column count = source count + 4 lineage
+### 3.2.2 Clean sales_order_header
 
-- [ ] Extract `Sales.SalesOrderDetail` → `bronze.sales_order_detail`
-  - Expected: ~121K rows
-  - Validate: row count = source count
-  - Validate: column count = source count + 4 lineage
+- [ ] SQL: Create `silver.sales_order_header_clean` from `bronze.sales_order_header`
+  - SELECT with transformations:
+    - `CAST(OrderDate AS DATE)`
+    - `CAST(DueDate AS DATE)`
+    - `CAST(ShipDate AS DATE)`
+    - `CAST(SubTotal AS NUMERIC(10, 2))`
+    - `CAST(TaxAmt AS NUMERIC(10, 2))`
+    - `CAST(Freight AS NUMERIC(10, 2))`
+    - `CAST(TotalDue AS NUMERIC(10, 2))`
+    - Standardize and deduplicate on `SalesOrderID`
+  - Validate no duplicate `SalesOrderID`
+  - Validate no critical NULLs on `OrderDate`, `CustomerID`, `SalesPersonID`
 
-- [ ] Extract `Sales.Customer` → `bronze.customer`
-  - Expected: ~20K rows
-  - Validate: row count = source count
-  - Validate: no duplicate CustomerID
+### 3.2.3 Clean sales_order_detail
 
-- [ ] Extract `Sales.SalesTerritory` → `bronze.sales_territory`
-  - Expected: ~10 rows
-  - Validate: row count = source count
+- [ ] SQL: Create `silver.sales_order_detail_clean` from `bronze.sales_order_detail`
+  - Standardize numeric fields and compute line totals
+  - Join to header to retain order date and status information
+  - Validate duplicates on `SalesOrderDetailID`
 
-- [ ] Extract `Sales.SalesPerson` → `bronze.sales_person`
-  - Expected: ~17 rows
-  - Validate: row count = source count
+### 3.2.4 Clean customer
 
-- [ ] Extract `Production.Product` → `bronze.product`
-  - Expected: ~504 rows
-  - Validate: row count = source count
-  - Note: may include discontinued products
+- [ ] SQL: Create `silver.customer_clean` from `bronze.customer`
+  - Standardize names and account references
+  - Validate no duplicate `CustomerID`
 
-### 3.1.3 Bronze Table Validation
+### 3.2.5 Clean sales_territory, sales_person, and product
 
-- [ ] Run `SELECT COUNT(*) FROM bronze.<table>` for each table
-  - Document row counts in checklist
-  - Compare to Phase 1 profiling results
-  - Flag any discrepancies
+- [ ] Create Silver versions for territory, salesperson, and product
+  - Validate counts and key constraints
+  - Use the Bronze tables as source data
 
-- [ ] Check for NULLs in critical columns
-  - `bronze.sales_order_header`: OrderDate, CustomerID, SalesPersonID
-  - `bronze.sales_order_detail`: SalesOrderID, ProductID, OrderQty, UnitPrice
-  - `bronze.customer`: CustomerID
-  - Document NULL counts
-
-- [ ] Validate data types in Bronze tables
-  - Verify dates are stored as DATE or TIMESTAMP
-  - Verify numeric fields are DECIMAL/NUMERIC with correct precision
-  - Verify strings are VARCHAR
-
-- [ ] Add primary key constraints (on source ID)
-  - `ALTER TABLE bronze.sales_order_header ADD PRIMARY KEY (SalesOrderID)`
-  - `ALTER TABLE bronze.sales_order_detail ADD PRIMARY KEY (SalesOrderDetailID)`
-  - `ALTER TABLE bronze.customer ADD PRIMARY KEY (CustomerID)`
-  - `ALTER TABLE bronze.sales_territory ADD PRIMARY KEY (TerritoryID)`
-  - `ALTER TABLE bronze.sales_person ADD PRIMARY KEY (SalesPersonID)`
-  - `ALTER TABLE bronze.product ADD PRIMARY KEY (ProductID)`
-
+---
 ### 3.1.4 Bronze Commit
 
 - [ ] Commit code and output to feature branch
