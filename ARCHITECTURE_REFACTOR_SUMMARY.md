@@ -1,270 +1,210 @@
 # Architecture Refactor Summary: Shared vs Feature Separation
 
 ## Overview
-The codebase has been refactored to cleanly separate **reusable platform infrastructure** from **feature-specific business logic**, while maintaining full backward compatibility during the transition.
+The codebase has been refactored to separate reusable platform infrastructure from feature-specific business logic. The canonical source of truth is now in the shared and feature layers, and the stale duplicate connector and bronze domain folders were removed after verification.
 
 ---
 
-## New Architecture Structure
+## Current Architecture Structure
 
-### 1. **Shared / Reusable Platform Layer** (`src/shared/`)
-This layer contains infrastructure that is reusable across all features and should be kept free of business-specific logic.
+### 1. Shared / Reusable Platform Layer
+This layer contains infrastructure that is reusable across all features and should remain free of business-specific logic.
 
 ```
 src/shared/
 ├── connectors/
-│   ├── __init__.py (re-exports)
-│   ├── base_connector.py          # Abstract base for all connectors
-│   ├── sql_server_connector.py    # SQL Server implementation
-│   └── postgres_connector.py      # PostgreSQL implementation
+│   ├── __init__.py
+│   ├── base_connector.py
+│   ├── sql_server_connector.py
+│   └── postgres_connector.py
 ├── services/
 │   ├── __init__.py
-│   └── connection_health_service.py # Health check service
-└── __init__.py
+│   └── connection_health_service.py
+├── __init__.py
+└── __pycache__/
 ```
 
-**Responsibilities:**
+Responsibilities:
 - Database connection lifecycle management
-- Connection pooling and configuration
+- Shared configuration and connection logic
 - Health checks and readiness probes
-- Re-usable across all features (Sales, Marketing, Finance, etc.)
+- Reusable platform services for all features
 
 ---
 
-### 2. **Feature-Specific Business Layer** (`src/features/`)
+### 2. Feature-Specific Business Layer
 This layer contains feature-specific ETL workflows and domain logic.
 
 ```
 src/features/
-└── Sales_Performance/             # Sales_Performance feature domain (matches git branch)
+└── Sales_Performance/
+    ├── __init__.py
     ├── domain/
-    │   └── bronze/                # Bronze layer for Sales
+    │   └── bronze/
     │       ├── __init__.py
-    │       ├── sales_extractor.py   # Extracts from SQL Server
-    │       ├── bronze_loader.py     # Loads to PostgreSQL
-    │       └── bronze_validator.py  # Validates row parity
+    │       ├── sales_extractor.py
+    │       ├── bronze_loader.py
+    │       └── bronze_validator.py
     ├── jobs/
     │   ├── __init__.py
-    │   └── sales_bronze_ingestion_job.py  # Orchestrates Sales ETL
-    └── __init__.py
+    │   └── sales_bronze_ingestion_job.py
+    └── __pycache__/
 ```
 
-**Responsibilities:**
-- Sales-specific ETL workflows
+Responsibilities:
+- Sales-specific ETL flow
 - Extraction, loading, and validation logic
-- Can be expanded with silver, gold layers
-- Isolated from other features (Marketing, Finance, etc.)
-
-**Future expansion example:**
-```
-src/features/
-├── Sales_Performance/
-│   ├── domain/bronze/
-│   ├── domain/silver/
-│   ├── domain/gold/
-│   └── jobs/
-├── Marketing_Analytics/
-│   ├── domain/bronze/
-│   ├── domain/silver/
-│   └── jobs/
-└── Financial_Reporting/
-    ├── domain/bronze/
-    └── jobs/
-```
+- Business logic stays isolated from shared infrastructure
+- Future features can live beside it under src/features/
 
 ---
 
-### 3. **Orchestration Layer** (`src/app/`)
+### 3. Orchestration Layer
 The application entry point that orchestrates jobs and services.
 
 ```
 src/app/
 ├── __init__.py
-└── app.py                         # Thin orchestrator - NO business logic
+└── app.py
 ```
 
-**Responsibilities:**
-- Initialize and wire dependencies
-- Call platform services (health checks)
-- Invoke feature jobs
-- No business logic here
+Responsibilities:
+- Initializes dependencies
+- Calls health checks
+- Invokes feature jobs
+- Keeps orchestration logic thin and separate from business logic
 
 ---
 
-### 4. **Platform Core** (`src/core/`)
-Contains core configuration and compatibility re-exports during transition.
+### 4. Core / Legacy Shells
+The remaining src/core package is not the source of truth anymore. It only contains support files such as configuration and a deprecated app shell, not the real implementation.
 
 ```
 src/core/
 ├── __init__.py
+├── app/
+│   ├── __init__.py
+│   └── app.py
 ├── config.py
-├── connectors.py                  # Re-exports from src.shared
-├── connectors/
-│   ├── __init__.py (re-exports)
-│   ├── base_connector.py
-│   ├── sql_server_connector.py
-│   └── postgres_connector.py
-└── (legacy services)
+└── __pycache__/
+```
+
+The real implementation lives under src/app, src/shared, and src/features/Sales_Performance.
+
+---
+
+## Canonical Rule
+Features depend on shared infrastructure, and shared infrastructure does not depend on feature logic.
+
+This is the intended dependency pattern:
+
+```
+app
+  ↓
+feature job
+  ↓
+shared connectors / services
 ```
 
 ---
 
-## Backward Compatibility Strategy
+## Backward Compatibility Status
+Duplicate legacy folders were intentionally removed after verification.
 
-To ensure a smooth transition without breaking existing code, all old import paths maintain re-exports that point to the new locations:
+Current compatibility surface is intentionally minimal and only includes package entry points where needed:
 
-### Old Path → New Path Mappings
+- src/jobs/__init__.py → exports PlatformBootstrapJob and SalesBronzeIngestionJob
+- src/services/__init__.py → exports ConnectionHealthService
+- src/core/app/app.py → deprecated wrapper to App
 
-| Old Import | New Import | Type |
-|---|---|---|
-| `src.core.connectors.BaseConnector` | `src.shared.connectors.BaseConnector` | Re-export |
-| `src.core.connectors.SQLServerConnector` | `src.shared.connectors.SQLServerConnector` | Re-export |
-| `src.core.connectors.PostgreSQLConnector` | `src.shared.connectors.PostgreSQLConnector` | Re-export |
-| `src.services.ConnectionHealthService` | `src.shared.services.ConnectionHealthService` | Re-export |
-| `src.jobs.SalesBronzeIngestionJob` | `src.features.Sales_Performance.jobs.SalesBronzeIngestionJob` | Re-export |
-| `src.domain.bronze.SalesExtractor` | `src.features.Sales_Performance.domain.bronze.SalesExtractor` | Re-export |
-| `src.domain.bronze.BronzeLoader` | `src.features.Sales_Performance.domain.bronze.BronzeLoader` | Re-export |
-| `src.domain.bronze.BronzeValidator` | `src.features.Sales_Performance.domain.bronze.BronzeValidator` | Re-export |
-
-**Current Status:**
-- ✅ All old imports still work (they re-export from new locations)
-- ✅ All new imports use the clean shared/features structure
-- ✅ Tests pass with both import patterns
-- ✅ No breaking changes
+This is a reduced compatibility footprint compared with the earlier transition state.
 
 ---
 
-## Migration Path (Gradual)
+## Migration Path
 
-### Phase 1: ✅ Complete (Current)
-- ✅ Created new shared platform layer in `src/shared/`
-- ✅ Created new feature layer in `src/features/Sales_Performance/`
-- ✅ Updated main app and tests to use new imports
-- ✅ Set up backward-compatible re-exports
-- ✅ Renamed folder to match git branch: `feature/phase3-sales-performance`
-- ✅ All tests passing
+### Phase 1: ✅ Complete
+- Shared platform layer created in src/shared
+- Feature layer created in src/features/Sales_Performance
+- App orchestration updated to canonical imports
+- Duplicate connector and bronze domain folders removed
+- Tests validated successfully
 
 ### Phase 2: Optional Future
-- Update all remaining code to use new import paths
-- Remove re-export shims once all code is migrated
-- Document the new pattern in WORKING_STANDARDS.md
-
-### Phase 3: Optional Future
-- Add new features (Marketing, Finance) under `src/features/`
-- Expand shared services as needs emerge
-- Keep feature code isolated
+- Add additional feature folders under src/features/
+- Expand shared services as needed
+- Keep feature code isolated and share only through src/shared
 
 ---
 
 ## Benefits of This Structure
 
-### 1. **Clear Separation of Concerns**
-- Platform code is reusable and stable
+### 1. Clear separation of concerns
+- Shared platform code is stable and reusable
 - Feature code is isolated and independently evolvable
-- No circular dependencies between features
+- No circular dependency between features
 
-### 2. **Scalability**
+### 2. Scalability
 - Easy to add new features without touching shared code
-- Reduces merge conflicts in shared infrastructure
-- Teams can work independently on features
+- Keeps the main platform reusable and consistent
 
-### 3. **Testability**
-- Shared layer can be tested in isolation
-- Feature tests don't depend on each other
-- Mock shared services in feature tests
+### 3. Testability
+- Shared services can be tested in isolation
+- Feature jobs can be tested without cross-feature coupling
 
-### 4. **Maintainability**
-- Clear contract between layers (shared → feature)
-- Easier to reason about impact of changes
-- Follows WORKING_STANDARDS.md requirements
-
-### 5. **Future-Proof**
-- Easily migrate to microservices per feature
-- Can add feature-specific pipelines
-- Supports multi-team development
+### 4. Maintainability
+- Canonical paths are easy to locate and reason about
+- The structure is aligned with the feature-based architecture
 
 ---
 
 ## Verification
 
-### Tests Status
+### Latest test status
 ```
 pytest -q tests/test_architecture_contract.py tests/test_bronze_ingestion_job.py
-Result: 4 passed in 1.29s ✅
+Result: 4 passed in 1.09s ✅
 ```
 
-### Key Test Coverage
-- ✅ Application entry point instantiation
-- ✅ Platform bootstrap job existence
-- ✅ Connection health service instantiation
-- ✅ Sales bronze ingestion job orchestration
-
----
-
-## Next Steps (Optional)
-
-1. **Update Documentation**
-   - Add this structure to WORKING_STANDARDS.md
-   - Create a feature developer guide
-   - Document the shared/features contract
-
-2. **Cleanup Old Files** (When ready)
-   - Remove re-export shims after full migration
-   - Update all imports project-wide
-   - Archive old code patterns
-
-3. **Add New Features**
-   - Create `src/features/Marketing_Analytics/`
-   - Create `src/features/Financial_Reporting/`
-   - Follow the same Bronze → Silver → Gold pattern
-   - Use descriptive, uppercase folder names (matching git branch naming conventions)
-
-4. **Enhance Shared Services**
-   - Add caching layer
-   - Add metrics/monitoring service
-   - Add shared data validation library
+### Key test coverage
+- Application entry point instantiation
+- Platform bootstrap job existence
+- Connection health service instantiation
+- Sales bronze ingestion job orchestration
 
 ---
 
 ## File Changes Summary
 
-### New Files Created
-- `src/shared/` (new shared platform layer)
-- `src/features/Sales_Performance/` (new feature layer for Sales)
-  - Matches git branch: `feature/phase3-sales-performance`
+### Canonical implementation locations
+- src/app/app.py
+- src/shared/connectors/
+- src/shared/services/
+- src/features/Sales_Performance/
 
-### Files Converted to Re-exports
-- `src/core/connectors/*.py` → point to `src/shared/connectors/`
-- `src/domain/bronze/*.py` → point to `src/features/Sales_Performance/domain/bronze/`
-- `src/jobs/sales_bronze_ingestion_job.py` → points to Sales_Performance feature version
-- `src/services/connection_health_service.py` → points to shared version
-- `src/core/app/app.py` → points to main app version
-- `src/core/connectors/*.py` → backward-compatible re-exports (not needed, kept for transition)
+### Removed duplicate content
+- src/core/connectors/
+- src/domain/bronze/
+- legacy connector re-export files in src/core
+- legacy bronze re-export files in src/domain
 
-### Files Updated (Imports Only)
-- `src/app/app.py` (imports from new locations)
-- `tests/test_architecture_contract.py` (imports from new locations)
-- `tests/test_bronze_ingestion_job.py` (imports from new locations)
+### Remaining package-level compatibility points
+- src/jobs/
+- src/services/
+- src/core/app/
+
+These are intentionally minimal and do not duplicate the true implementation logic.
 
 ---
 
-## Questions & Answers
+## Final Notes
+- Feature folder naming matches the branch naming convention: Sales_Performance
+- Shared modules are the real reusable source of truth
+- The project is ready for the next feature expansion phase without reintroducing duplicate layers
+- The current structure is intentionally clean and easy to extend
 
-**Q: Why keep old files if they're just re-exports?**
-A: Backward compatibility. External code or scripts may still import from old locations. Re-exports let us transition gradually without breaking changes.
+---
 
-**Q: When should I stop using old import paths?**
-A: Once all code in the repo is updated to new paths. The team can decide when to deprecate re-exports.
-
-**Q: How do I add a new feature?**
-A: Create `src/features/Feature_Name/` with the same pattern: `domain/{bronze,silver,gold}` + `jobs/`.
-Use descriptive names that match your git branch naming (e.g., `Marketing_Analytics` for `feature/marketing-analytics`).
-
-**Q: Can features share code?**
-A: Through `src/shared/` layer only. Features should not import from each other.
-
-**Q: What about utils, helpers, etc?**
-A: Should live in `src/shared/` or `src/core/` if truly reusable. Feature-specific utils go in `src/features/Feature_Name/`.
-
-**Q: Why is it `Sales_Performance` and not `sales`?**
-A: To match git branch naming conventions (`feature/phase3-sales-performance`). Feature folders should use descriptive, uppercase names that are self-documenting and aligned with project naming standards.
+Last Updated: 2026-08-31
+Branch: feature/phase3-sales-performance
+Status: Ready for continued feature development
