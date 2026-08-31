@@ -1,6 +1,6 @@
 from src.jobs.platform_bootstrap import PlatformBootstrapJob
-from src.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
-from src.services.connection_health_service import ConnectionHealthService
+from src.features.Sales_Performance.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
+from src.shared.services.connection_health_service import ConnectionHealthService
 
 
 class App:

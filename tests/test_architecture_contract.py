@@ -1,6 +1,6 @@
 from src.app.app import App
 from src.jobs.platform_bootstrap import PlatformBootstrapJob
-from src.services.connection_health_service import ConnectionHealthService
+from src.shared.services.connection_health_service import ConnectionHealthService
 
 
 def test_application_entrypoint_exists():

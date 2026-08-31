@@ -1,7 +1,8 @@
-"""Compatibility wrapper for Bronze ingestion.
+"""Deprecated compatibility wrapper for Bronze ingestion.
 
-This script intentionally delegates all real processing to the new class-based
-job implementation so the project keeps a single source of truth for ETL logic.
+This script is retained only for backward compatibility. All real ETL logic must
+live in the canonical class-based job implementation in
+`src.jobs.sales_bronze_ingestion_job`. New work should not be added here.
 """
 
 import argparse
@@ -14,9 +15,14 @@ logger = setup_logging(__name__)
 
 
 def main():
-    """CLI entry point retained for compatibility with legacy usage."""
+    """Deprecated CLI entry point retained for backward compatibility."""
+    logger.warning(
+        "DEPRECATION WARNING: %s is a compatibility wrapper only. "
+        "Use src.jobs.sales_bronze_ingestion_job.SalesBronzeIngestionJob as the canonical ingestion path.",
+        __file__,
+    )
     parser = argparse.ArgumentParser(
-        description="Bronze extraction for sales domain"
+        description="Deprecated compatibility wrapper for Bronze extraction. Use the class-based job instead."
     )
     parser.add_argument(
         "--mode",

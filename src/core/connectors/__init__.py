@@ -1,8 +1,4 @@
-"""Backward-compatible re-export for connector classes.
-
-New code should import from src.shared.connectors.<connector_name> modules.
-This module remains to avoid breaking older imports.
-"""
+"""Backward-compatible re-export of shared connector classes."""
 
 from src.shared.connectors.base_connector import BaseConnector
 from src.shared.connectors.postgres_connector import PostgreSQLConnector

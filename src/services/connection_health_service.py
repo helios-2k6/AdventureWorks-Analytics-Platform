@@ -1,9 +1,8 @@
-class ConnectionHealthService:
-    """Service for checking whether configured connections are healthy."""
+"""Backward-compatible re-export of the connection health service.
 
-    def check_all(self):
-        """Perform health checks for registered connections."""
-        return {
-            "status": "ok",
-            "connections": []
-        }
+New code should import from src.shared.services.connection_health_service
+"""
+
+from src.shared.services.connection_health_service import ConnectionHealthService
+
+__all__ = ["ConnectionHealthService"]

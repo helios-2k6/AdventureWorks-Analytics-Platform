@@ -1,4 +1,4 @@
-from src.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
+from src.features.Sales_Performance.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
 
 
 def test_sales_bronze_ingestion_job_exists():
