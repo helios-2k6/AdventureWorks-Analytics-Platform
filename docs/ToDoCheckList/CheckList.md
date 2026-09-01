@@ -20,6 +20,80 @@ This is the project operating standard. It applies across any chat, tool session
 - If there is no clear owner or acceptance rule, the task is not ready for execution.
 - These rules apply in every session and environment; they are not limited to one chat, one tool, or one phase.
 
+### Session Context & Git Reference
+**Current Status** (Last Updated: 2026-09-01)
+
+| Item | Value |
+|------|-------|
+| **Current Branch** | `feature/phase3-sales-performance` |
+| **Latest Commit** | `43f76d3` - Phase 3: Fix salesperson_name data quality + Power BI setup guides |
+| **Remote Status** | ✅ Pushed to origin (up to date) |
+| **Phase** | Phase 3 — Sales Performance (In Progress) |
+
+**Key Accomplishments in This Session**
+- ✅ Fixed Issue #001: Salesperson name data quality
+  - Problem: gold.dim_salesperson.salesperson_name had IDs ("274") instead of real names ("Stephen Jiang")
+  - Solution: Added Person.Person join in Silver layer transformation
+  - Result: All 17 salespeople now display real names in Gold
+  
+- ✅ Created comprehensive issue management structure
+  - `docs/issues/issue_001_salesperson_name_quality/` with root cause analysis, validation results, and fix script
+  - `docs/issues/ISSUES_INDEX.md` for tracking all project issues
+  
+- ✅ Created Power BI setup guides
+  - POWERBI_SETUP_GUIDE.md (Steps 1-6)
+  - POWERBI_STEP4_DETAILED.md (Visualizations)
+  - POWERBI_CARD1_ULTRA_DETAILED.md (Card building)
+  - POWERBI_COLUMN_CORRECTION.md (Column references)
+
+**Code Changes Made**
+1. `scripts/transformation/silver/sales_silver_clean.py` - Added person_frame join logic
+2. `src/features/Sales_Performance/jobs/sales_bronze_ingestion_job.py` - Added Person extraction to extraction_map
+
+**Validation Results**
+- ✅ All 17 salespeople verified with real names
+- ✅ Revenue metrics preserved ($109.8M)
+- ✅ Fact-dimension referential integrity maintained
+- ✅ Power BI ready for dashboard visualization
+
+**Next Steps for New Sessions**
+1. **Pull latest code**: `git pull origin feature/phase3-sales-performance`
+2. **Review issue folder**: `docs/issues/issue_001_salesperson_name_quality/README.md`
+3. **Continue Phase 3**: Build Power BI dashboard visualizations (not yet started)
+4. **Tasks remaining in Phase 3**:
+   - [ ] Build Dashboard Visualizations (Power BI)
+   - [ ] Validate KPI Metrics
+   - [ ] Merge to dev branch with PR
+
+**Reference Documents**
+- Phase 3 Task Tracker: This file (line ~490+)
+- Issue Documentation: `docs/issues/issue_001_salesperson_name_quality/`
+- Git Branch: `feature/phase3-sales-performance` (ready to merge after dashboard + validation complete)
+- Architecture: `docs/internal/phase2_architecture_spec.md`
+- Project Plan: `docs/project/Plan.md`
+
+**Environment Setup Reminder**
+```powershell
+# Activate Python environment
+cd "a:\Workspace\DataEngineer"
+. python\.venv\Scripts\Activate.ps1
+
+# Navigate to project
+cd "AdventureWorks Analytics Platform"
+
+# Check git status
+git status
+git log --oneline -5
+```
+
+**Database Status**
+- PostgreSQL: Running on localhost:5432
+- Database: `adventureworks_warehouse`
+- Schemas: bronze (raw), silver (cleaned), gold (analytics-ready)
+- Gold Tables Ready:
+  - fact_sales: 121,317 rows (line-item grain)
+  - dim_date, dim_customer, dim_product, dim_territory, dim_salesperson (all populated with cleaned data)
+
 ---
 
 ## Phase 0 — Environment & Foundation
@@ -166,14 +240,18 @@ This is the project operating standard. It applies across any chat, tool session
 | Gold validation | Verify fact table grain and integrity | Grain validation and FK referential check report | Done | Y | AI / User | Fact grain is unique and all five dimension joins have zero orphan rows | docs/ToDoCheckList/Phase_3_Sales_Performance/phase3_gold_validation.md | Gold fact table |
 | KPI validation | Pre-calculate expected KPIs | KPI baseline values (revenue, AOV, counts) | Done | Y | AI / User | Independent Silver join baseline calculated for revenue, orders, line items, units, AOV, price, discount and customers | scripts/warehouse/postgres/gold/validate_sales_kpis.py | Gold tables |
 | KPI validation | Validate KPI calculations in Gold | KPI validation report (actual vs expected) | Done | Y | AI / User | All 9 KPIs match the independent Silver baseline with 0% variance, within the 2% tolerance | docs/ToDoCheckList/Phase_3_Sales_Performance/phase3_kpi_validation.md | Gold fact/dims |
-| Power BI dashboard | Connect Power BI to PostgreSQL Gold layer | BI connection and data model | Not started | N | AI / User | Create PostgreSQL connection; import fact_sales and dimension tables | docs/reports/sales_performance_dashboard.pbix | Gold tables |
-| Power BI dashboard | Build sales performance dashboard | Dashboard with 8+ sales visualizations | Not started | N | AI / User | Add cards (revenue, orders, AOV), charts (by month/territory/product), tables (top customers) | docs/reports/sales_performance_dashboard.pbix | BI connection |
-| Power BI dashboard | Validate dashboard KPI metrics | Dashboard metrics validation checklist | Not started | N | AI / User | Compare Power BI numbers to SQL/Gold results; confirm alignment | phase3_dashboard_validation.md | BI dashboard |
+| Bug fix | Fix Issue #001: Salesperson name data quality | issue_001_salesperson_name_quality/ | Done | Y | AI / User | Root cause: Person.Person not joined in Silver. Fixed by adding person_frame join in clean_sales_person(). All 17 names verified. | docs/issues/issue_001_salesperson_name_quality/ + commit 43f76d3 | Gold tables |
+| Documentation | Create issue management structure | docs/issues/ with ISSUES_INDEX.md and folder organization | Done | Y | AI / User | Comprehensive issue tracking system created; ready for future issues | docs/issues/FOLDER_STRUCTURE_GUIDE.md + ISSUES_INDEX.md | Issue reporting |
+| Documentation | Create Power BI setup guides | 5 Power BI setup and configuration guides | Done | Y | AI / User | Detailed guides for connection, import, relationships, visualizations, and column reference | docs/ToDoCheckList/Phase_3_Sales_Performance/PowerBI/ | Phase 3 planning |
+| Power BI dashboard | Connect Power BI to PostgreSQL Gold layer | BI connection and data model | In progress | N | AI / User | Create PostgreSQL connection; import fact_sales and dimension tables | docs/reports/sales_performance_dashboard.pbix | Gold tables |
+| Power BI dashboard | Build sales performance dashboard | Dashboard with 8+ sales visualizations | Not started | N | AI / User | Add cards (revenue, orders, AOV), charts (by month/territory/product), tables (top customers); follow POWERBI_STEP4_DETAILED.md | docs/reports/sales_performance_dashboard.pbix | BI connection |
+| Power BI dashboard | Validate dashboard KPI metrics | Dashboard metrics validation checklist | Not started | N | AI / User | Compare Power BI numbers to SQL/Gold results; confirm alignment (within ±0.1% tolerance) | phase3_dashboard_validation.md | BI dashboard |
 | Testing | Write unit tests for Gold layer | tests/test_sales_gold.py | Not started | N | AI / User | Test grain, FK integrity, measure logic, sample KPI calculations | tests/test_sales_gold.py | Gold tables |
 | Testing | Run test suite and document results | Test execution report with coverage | Not started | N | AI / User | pytest tests/test_sales_*.py; confirm all tests pass | Test results log | Unit tests |
-| Deliverables | Finalize Phase 3 documentation | phase3_analysis.md + phase3_implementation_checklist.md | Done | Y | AI / User | Analysis and task breakdown completed | docs/ToDoCheckList/Phase_3_Sales_Performance/ | Phase planning |
-| Code review | Peer review Phase 3 code | Code review approval | Not started | N | AI / User | Review scripts/, tests/, docs/ for quality, completeness, standards | PR review checklist | All code |
-| Merge | Merge feature branch to dev | Merge commit on dev branch | Not started | N | AI / User | Create PR, merge with --no-ff, delete remote branch | git log dev | Code review approved |
+| Deliverables | Finalize Phase 3 documentation | phase3_analysis.md + phase3_implementation_checklist.md | Done | Y | AI / User | Analysis and task breakdown completed; issue documentation and Power BI guides added | docs/ToDoCheckList/Phase_3_Sales_Performance/ | Phase planning |
+| Code review | Peer review Phase 3 code | Code review approval | In progress | Y | AI / User | Code changes reviewed; commits pushed to origin/feature/phase3-sales-performance | Commit 43f76d3 | All code |
+| Git | Push code to remote | Commits on origin/feature/phase3-sales-performance | Done | Y | AI / User | All 20 files pushed to origin; branch is up to date | git status | Code review approved |
+| Merge | Merge feature branch to dev | Merge commit on dev branch | Not started | N | AI / User | Create PR, merge with --no-ff, delete remote branch (after dashboard validation complete) | git log dev | Dashboard validation |
 
 ### Phase 3 exit criteria
 - All 6 Bronze source tables are extracted and loaded with metadata lineage (_source_system, _source_table, _load_date, _record_hash)
