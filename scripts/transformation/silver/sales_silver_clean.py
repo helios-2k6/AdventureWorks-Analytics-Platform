@@ -140,7 +140,7 @@ def clean_sales_territory(frame: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
-def clean_sales_person(frame: pd.DataFrame) -> pd.DataFrame:
+def clean_sales_person(frame: pd.DataFrame, person_frame: pd.DataFrame = None) -> pd.DataFrame:
     result = _rename_columns(
         frame,
         {
@@ -154,7 +154,27 @@ def clean_sales_person(frame: pd.DataFrame) -> pd.DataFrame:
         },
     )
     result["salesperson_id"] = result["business_entity_id"]
-    result["salesperson_name"] = result["business_entity_id"].astype("string")
+    
+    # If person_frame provided, join to get real names
+    if person_frame is not None:
+        person_clean = _rename_columns(
+            person_frame,
+            {
+                "BusinessEntityID": "business_entity_id",
+                "FirstName": "first_name",
+                "LastName": "last_name",
+            },
+        )
+        person_clean = person_clean[["business_entity_id", "first_name", "last_name"]]
+        result = result.merge(person_clean, on="business_entity_id", how="left")
+        result["salesperson_name"] = (
+            result["first_name"].fillna("") + " " + result["last_name"].fillna("")
+        ).str.strip()
+        result = result.drop(columns=["first_name", "last_name"], errors="ignore")
+    else:
+        # Fallback: use ID if person data not available
+        result["salesperson_name"] = result["business_entity_id"].astype("string")
+    
     result = _deduplicate(result, "salesperson_id")
     return _select_columns(result, [
         "salesperson_id", "business_entity_id", "territory_id", "sales_quota", "bonus",
@@ -205,9 +225,23 @@ def run() -> Dict[str, Dict[str, int]]:
     results = {}
     with PostgreSQLConnector() as pg_conn:
         engine = _warehouse_engine(pg_conn.connection)
+        
+        # Read Person data once if available
+        person_frame = None
+        try:
+            person_frame = _read_bronze("person", engine)
+        except Exception:
+            print("⚠️ Warning: Person table not found in Bronze. Using fallback names.")
+        
         for source_table, target_table in SILVER_TABLES.items():
             bronze_frame = _read_bronze(source_table, engine)
-            silver_frame = CLEANERS[source_table](bronze_frame)
+            
+            # Pass person_frame to clean_sales_person if this is sales_person table
+            if source_table == "sales_person" and person_frame is not None:
+                silver_frame = CLEANERS[source_table](bronze_frame, person_frame)
+            else:
+                silver_frame = CLEANERS[source_table](bronze_frame)
+            
             silver_frame.to_sql(target_table, engine, schema="silver", if_exists="replace", index=False, method="multi", chunksize=1000)
             results[target_table] = {
                 "source_count": len(bronze_frame),

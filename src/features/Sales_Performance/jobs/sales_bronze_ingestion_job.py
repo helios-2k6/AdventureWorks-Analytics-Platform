@@ -25,6 +25,7 @@ class SalesBronzeIngestionJob:
             ("Sales", "SalesTerritory", "sales_territory"),
             ("Sales", "SalesPerson", "sales_person"),
             ("Production", "Product", "product"),
+            ("Person", "Person", "person"),  # ← ← ← ADDED: Extract Person names
         ]
 
         results = {}
