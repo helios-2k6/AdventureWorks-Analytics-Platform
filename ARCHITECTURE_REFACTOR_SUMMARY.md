@@ -111,11 +111,12 @@ shared connectors / services
 ## Backward Compatibility Status
 Duplicate legacy folders were intentionally removed after verification.
 
-Current compatibility surface is intentionally minimal and only includes package entry points where needed:
+Current compatibility surface is intentionally minimal and includes package entry points where needed:
 
 - src/jobs/__init__.py → exports PlatformBootstrapJob and SalesBronzeIngestionJob
 - src/services/__init__.py → exports ConnectionHealthService
 - src/core/app/app.py → deprecated wrapper to App
+- scripts/ingestion/bronze/sales_bronze_load.py → deprecated CLI wrapper to the canonical SalesBronzeIngestionJob
 
 This is a reduced compatibility footprint compared with the earlier transition state.
 
@@ -162,8 +163,8 @@ This is a reduced compatibility footprint compared with the earlier transition s
 
 ### Latest test status
 ```
-pytest -q tests/test_architecture_contract.py tests/test_bronze_ingestion_job.py
-Result: 4 passed in 1.09s ✅
+pytest -q tests/test_architecture_contract.py tests/test_bronze_ingestion_job.py tests/test_sales_silver.py tests/test_sales_gold.py tests/test_sql_connection.py
+Result: 29 passed ✅
 ```
 
 ### Key test coverage
@@ -171,6 +172,9 @@ Result: 4 passed in 1.09s ✅
 - Platform bootstrap job existence
 - Connection health service instantiation
 - Sales bronze ingestion job orchestration
+- Silver cleaning and deduplication behavior
+- Gold dimensions, fact grain, and KPI calculations
+- SQL Server connectivity check is collected as a pytest test and skipped when unavailable
 
 ---
 

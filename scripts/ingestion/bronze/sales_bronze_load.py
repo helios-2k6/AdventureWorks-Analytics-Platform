@@ -2,13 +2,13 @@
 
 This script is retained only for backward compatibility. All real ETL logic must
 live in the canonical class-based job implementation in
-`src.jobs.sales_bronze_ingestion_job`. New work should not be added here.
+`src.features.Sales_Performance.jobs.sales_bronze_ingestion_job`. New work should not be added here.
 """
 
 import argparse
 import sys
 
-from src.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
+from src.features.Sales_Performance.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
 from src.utils.logger import setup_logging
 
 logger = setup_logging(__name__)
@@ -18,7 +18,7 @@ def main():
     """Deprecated CLI entry point retained for backward compatibility."""
     logger.warning(
         "DEPRECATION WARNING: %s is a compatibility wrapper only. "
-        "Use src.jobs.sales_bronze_ingestion_job.SalesBronzeIngestionJob as the canonical ingestion path.",
+        "Use src.features.Sales_Performance.jobs.sales_bronze_ingestion_job.SalesBronzeIngestionJob as the canonical ingestion path.",
         __file__,
     )
     parser = argparse.ArgumentParser(

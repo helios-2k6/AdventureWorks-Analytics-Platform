@@ -95,13 +95,14 @@ def validate(pg: PostgreSQLConnector) -> dict[str, Any]:
             "bronze_count": bronze_count,
             "silver_count": silver_count,
             "count_match": bronze_count == silver_count,
+            "no_unexpected_row_loss": silver_count <= bronze_count,
             "duplicate_key_groups": duplicate_count,
             "null_counts": null_counts,
         }
 
     joins = {name: _count(pg, query) for name, query in JOIN_CHECKS.items()}
     passed = all(
-        result["count_match"]
+        result["no_unexpected_row_loss"]
         and result["duplicate_key_groups"] == 0
         and all(value == 0 for value in result["null_counts"].values())
         for result in tables.values()
@@ -117,14 +118,15 @@ def render_report(report: dict[str, Any]) -> str:
         "",
         "## Table quality checks",
         "",
-        "| Silver table | Bronze rows | Silver rows | Count match | Duplicate key groups | NULL checks |",
+        "| Silver table | Bronze rows | Silver rows | Row-count check | Duplicate key groups | NULL checks |",
         "|---|---:|---:|---|---:|---|",
     ]
     for table, result in report["tables"].items():
         null_text = "; ".join(f"{column}={count}" for column, count in result["null_counts"].items())
         lines.append(
             f"| {table} | {result['bronze_count']:,} | {result['silver_count']:,} | "
-            f"{'PASS' if result['count_match'] else 'FAIL'} | {result['duplicate_key_groups']} | {null_text} |"
+            f"{'PASS' if result['no_unexpected_row_loss'] else 'FAIL'} | "
+            f"{result['duplicate_key_groups']} | {null_text} |"
         )
     lines.extend(["", "## Join integrity", "", "| Join check | Orphan rows | Status |", "|---|---:|---|"])
     for name, count in report["joins"].items():

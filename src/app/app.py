@@ -18,8 +18,18 @@ class App:
         health_result = self.health_service.check_all()
         bootstrap_result = self.bootstrap_job.run()
         bronze_result = self.bronze_job.run(mode="full")
+        bronze_ok = all(
+            item.get("status") == "SUCCESS" for item in bronze_result.values()
+        )
+        overall_status = (
+            "ok"
+            if health_result.get("status") == "ok"
+            and bootstrap_result.get("status") == "ok"
+            and bronze_ok
+            else "degraded"
+        )
         return {
-            "status": "ok",
+            "status": overall_status,
             "health": health_result,
             "bootstrap": bootstrap_result,
             "bronze": bronze_result,
