@@ -1,6 +1,6 @@
 # Phase 3 Sales KPI Validation Report
 
-Generated at: 2026-09-02T07:14:03.135051+00:00
+Generated at: 2026-09-02T07:27:51.742351+00:00
 
 Gold KPIs are compared with an independent baseline calculated from Silver detail joined to Silver header.
 
@@ -19,26 +19,3 @@ Gold KPIs are compared with an independent baseline calculated from Silver detai
 ## Result
 
 **PASS**
-
-## Validation Summary
-
-The following checks were verified after the Gold layer build and before using the dashboard data:
-
-- Fact sales grain: confirmed at line-item grain with unique `sales_order_detail_id`; row count matches the expected 121,317 rows.
-- Dimension key integrity: dimension tables were checked for unique keys and referential integrity against the fact table; no orphan keys were found.
-- KPI logic: Gold metrics were compared against an independent Silver baseline using the same business definitions; variance was 0.000000% for all KPIs.
-- Warehouse accuracy: the Gold layer remains consistent with the Silver source data for revenue, order counts, item counts, unit counts, and customer counts.
-- Unit tests: the project-level Gold tests now pass, validating the logic behind dashboard metrics and data transformation rules.
-
-### Evidence
-
-Commands executed successfully:
-
-```powershell
-Set-Location 'A:\Workspace\DataEngineer\AdventureWorks Analytics Platform'
-$env:PYTHONPATH='.'
-.\.venv64\Scripts\python.exe scripts/warehouse/postgres/gold/validate_sales_kpis.py
-.\.venv64\Scripts\python.exe -m pytest tests/test_sales_gold.py -q
-```
-
-Result: KPI validation passed and 18 Gold-layer tests passed in 2.21s.
