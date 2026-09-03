@@ -23,6 +23,26 @@
 - `Blocked`: Bị chặn bởi dependency hoặc môi trường.
 - `Needs clarification`: Cần xác nhận thêm về phạm vi hoặc tiêu chí nghiệm thu.
 
+## Cấu trúc và cách sử dụng tài liệu
+
+Tài liệu này có năm loại nội dung. Đọc theo thứ tự từ trên xuống dưới; mỗi loại có vai trò khác nhau và không thay thế cho loại còn lại:
+
+1. **Bối cảnh và đánh giá**: mô tả phạm vi Phase 4, hiện trạng, rủi ro và tác động.
+2. **Đề xuất và baseline đã chốt**: mô tả hướng xử lý; các bảng có cụm “đã chốt” là tiêu chí implementation bắt buộc.
+3. **Kiến trúc và policy dùng chung**: quy định ownership, retry, idempotency, checkpoint, quarantine, logging và publication safety để các stage áp dụng thống nhất.
+4. **Checklist và thứ tự triển khai**: chuyển các quyết định thành công việc có owner, dependency và evidence.
+5. **Definition of Done và nhật ký bằng chứng**: DoD là tiêu chí mục tiêu; nhật ký là kết quả đã ghi nhận thực tế.
+
+Trình tự đọc chi tiết:
+
+1. [Bối cảnh Phase](#bối-cảnh-phase), [quy ước trạng thái](#quy-ước-trạng-thái) và [đánh giá code hiện tại](#đánh-giá-code-hiện-tại).
+2. [Kết quả review kỹ thuật](#kết-quả-review-kỹ-thuật-cần-trao-đổi), bắt đầu từ configuration và các quyết định theo Bronze, Silver, Gold.
+3. [Hành vi context manager của connector](#hành-vi-context-manager-của-connector) và [review retry/idempotency](#review-cơ-chế-retry-và-idempotency), là các policy áp dụng xuyên suốt.
+4. [Baseline tách domain và kiến trúc Bronze](#baseline-tách-domain-và-kiến-trúc-bronze), để xác định ownership và shared mechanics.
+5. [Checklist công việc](#checklist-công-việc-chính), [thứ tự triển khai](#thứ-tự-triển-khai-đề-xuất), [Definition of Done](#definition-of-done-cho-phase-4), rồi đến [nhật ký bằng chứng](#nhật-ký-bằng-chứng).
+
+Khi cùng một quyết định xuất hiện ở nhiều nơi, hãy đọc theo vai trò: phần đánh giá giải thích **vì sao cần thay đổi**, baseline xác định **phải triển khai thế nào**, checklist xác định **cần làm gì**, còn DoD xác định **khi nào được nghiệm thu**. Không phần nào được dùng để bỏ qua các chi tiết hoặc điều kiện nghiệm thu của phần khác.
+
 ## Đánh giá code hiện tại
 
 | Khu vực | Hiện trạng | Tác động hiện tại | Mục tiêu sau enhance |
@@ -184,7 +204,8 @@ Test configuration bắt buộc:
 | Secret logging | Password không xuất hiện trong log hoặc rendered report |
 
 ### Đánh giá Bronze về read, batch và streaming
-Cần quyết định rõ batch size, phạm vi commit, phạm vi retry, thứ tự đọc và chiến lược resume. Chỉ dùng `drop_duplicates()` theo từng batch là không an toàn nếu cùng business key có thể nằm ở các batch khác nhau.
+
+Phần này gồm ba lớp thông tin: hiện trạng cần cải thiện, baseline đã chốt và luồng implementation. Câu hỏi về batch size, commit, retry, thứ tự đọc và resume được giải đáp cụ thể trong baseline; phần đánh giá bên dưới chỉ nêu nguyên nhân và tác động của các hạn chế hiện tại.
 
 #### Baseline Bronze đã chốt để implementation
 
@@ -207,7 +228,7 @@ Các quyết định sau đã được phê duyệt và bắt buộc dùng làm 
 | Incremental checkpoint | Watermark hoặc key range ổn định, advance transactionally cùng batch thành công | Không advance checkpoint trước data commit |
 | Dữ liệu rejected | Dùng quarantine mode cho lỗi cấp record có thể cô lập; lưu riêng với reason và load identity | Record hợp lệ tiếp tục vào staging; record lỗi không biến mất âm thầm và full payload không vào log thông thường |
 
-Luồng Bronze canonical để implementation:
+ Luồng Bronze canonical để implementation:
 
 ```text
 create run_id/load_id
@@ -223,7 +244,7 @@ create run_id/load_id
 									  -> publish staging thành Bronze
 ```
 
-Bất kỳ implementation nào dùng `fetchall()`, append trực tiếp vào published table, advance checkpoint trước commit, retry mù một write không rõ trạng thái hoặc silently drop rejected row đều không đạt baseline Phase 4 này.
+Bất kỳ implementation nào dùng `fetchall()`, append trực tiếp vào published table, advance checkpoint trước commit, retry mù một write không rõ trạng thái hoặc silently drop rejected row đều không đạt baseline Phase 4 này. Luồng này là quy trình chuẩn; luồng Bronze mục tiêu bên dưới được giữ lại như mô tả khái quát để đối chiếu với hiện trạng.
 
 
 | Bước | Implementation hiện tại | Đánh giá |
@@ -233,7 +254,7 @@ Bất kỳ implementation nào dùng `fetchall()`, append trực tiếp vào pub
 | Ghi PostgreSQL | `to_sql(..., method="multi", chunksize=1000)` | Có batching khi ghi; chưa phải streaming end-to-end |
 | Bronze utility cũ | `bronze_ingest.py` cũng dùng `fetchall()` và chuẩn bị toàn bộ values cho `executemany()` | Có cùng hạn chế về memory và recovery |
 
-Luồng Bronze mục tiêu:
+Luồng Bronze mục tiêu (tóm tắt đối chiếu):
 
 ```text
 SQL Server cursor
@@ -245,9 +266,11 @@ SQL Server cursor
 					  -> batch audit
 ```
 
-Cần quyết định rõ batch size, phạm vi commit, phạm vi retry, thứ tự đọc và chiến lược resume. Chỉ dùng `drop_duplicates()` theo từng batch là không an toàn nếu cùng business key có thể nằm ở các batch khác nhau.
+Các quyết định chi tiết tương ứng đã được chốt trong “Baseline Bronze đã chốt” ở trên. Không dùng `drop_duplicates()` theo từng batch như một cơ chế dedup Bronze, vì cùng business key có thể nằm ở các batch khác nhau.
 
 ### Xử lý lỗi và dữ liệu rejected ở Bronze
+
+Đây là phần tập trung cho error handling và quarantine của Bronze. Baseline Bronze nêu quyết định tổng quát; phần này quy định cách ghi nhận rejected row, threshold và trạng thái publish, để các chi tiết không bị phân tán giữa nhiều phần.
 
 | Khu vực | Hành vi hiện tại | Tác động | Enhancement cần có |
 |---|---|---|---|
@@ -276,6 +299,8 @@ batch
 
 ### Đánh giá Silver về read, batch và error
 
+Phần này trước hết ghi nhận các hạn chế của Silver, sau đó chốt mô hình xử lý và status contract. Các nguyên tắc retry, checkpoint và idempotency dùng chung được quy định ở mục review retry/idempotency; baseline Silver bên dưới chỉ giữ các yêu cầu riêng của transformation và publication.
+
 | Khu vực | Hành vi hiện tại | Tác động | Enhancement cần có |
 |---|---|---|---|
 | Chiến lược đọc | `_read_bronze()` gọi `pd.read_sql_query()` không có `chunksize` | Toàn bộ Bronze table được load vào memory | Dùng chunk có kiểm soát hoặc SQL xử lý trong database cho bảng lớn |
@@ -284,7 +309,7 @@ batch
 | Thiếu Person data | Thiếu `bronze.person` thì dùng `print()` và fallback name | Warning không structured và suy giảm chất lượng có thể bị bỏ qua | Log warning có context và nêu rõ fallback policy trong validation/report |
 | Schema error | Chưa validate required column trước transformation | Column thiếu hoặc đổi tên sẽ lỗi muộn | Thêm input/output schema contract, error ghi rõ table và column |
 
-Với Silver, streaming không tự động đúng: dedup toàn cục theo business key cần window function trong database, staging hoặc state xuyên suốt các batch. Hướng thực tế là clean/dedup trong PostgreSQL rồi publish Silver bằng flow atomic.
+Với Silver, streaming không tự động đúng: dedup toàn cục theo business key cần window function trong database, staging hoặc state xuyên suốt các batch. Hướng thực tế là clean/dedup trong PostgreSQL rồi publish Silver bằng flow atomic. Chi tiết implementation bắt buộc được tập trung trong baseline Silver ngay sau đây.
 
 #### Baseline Silver đã chốt để implementation
 
@@ -338,6 +363,8 @@ Các status bắt buộc của Silver result:
 | `FAILED` | Lỗi system/schema/contract, vượt rejected threshold hoặc validation fail; không publish Silver mới |
 
 ### Đánh giá Gold về read, batch và publish safety
+
+Phần này phân biệt rủi ro của cách build Gold hiện tại với policy publication đã chốt. Các yêu cầu staging, validation và atomic publish được trình bày đầy đủ trong baseline Gold; checklist phía sau chỉ chuyển chúng thành task triển khai.
 
 | Khu vực | Hành vi hiện tại | Tác động | Enhancement cần có |
 |---|---|---|---|
@@ -428,6 +455,8 @@ Bất kỳ implementation nào drop Gold đang publish trước khi build thành
 
 ### Review cơ chế retry và idempotency
 
+Đây là policy dùng chung cho toàn pipeline, không phải một stage độc lập. Bronze, Silver và Gold đã nhắc lại các quy tắc liên quan trong baseline để bảo đảm từng stage có tiêu chí implementation đầy đủ; mục này giải thích khái niệm, identity, phân loại lỗi và cách kiểm thử thống nhất.
+
 #### Đánh giá hiện tại
 
 | Khu vực | Hành vi hiện tại | Đánh giá |
@@ -474,6 +503,8 @@ Retry cho cùng operation phải dùng lại `load_id` và `batch_id`; không đ
 
 #### Thiết kế Bronze đề xuất
 
+Phần này áp dụng policy chung ở trên vào boundary của Bronze; các yêu cầu riêng về batch, quarantine và publish đã được trình bày trong các mục Bronze tương ứng.
+
 Dùng staging table và uniqueness rule deterministic trước khi publish:
 
 ```text
@@ -490,6 +521,8 @@ Với incremental load, đọc theo watermark ổn định hoặc source key ran
 Quy tắc quan trọng: **không advance checkpoint trước khi data commit thành công**. Nếu commit outcome không rõ, phải query lại idempotency key để reconcile trước khi retry.
 
 #### Thiết kế Silver và Gold đề xuất
+
+Phần này chỉ nhấn mạnh cách retry ảnh hưởng đến publication của Silver và Gold; không tạo thêm một policy khác với policy chung.
 
 Silver transformation phải deterministic với cùng Bronze snapshot và transformation version. Retry nên chạy lại staging transformation, không append thêm một bản Silver thứ hai. Dedup toàn cục cần window function trong database, staging hoặc state xuyên suốt các batch.
 
@@ -508,6 +541,8 @@ Gold nên được build trong staging table theo run. Retry chỉ rebuild stagi
 | Gold build fail trong lúc retry | Gold publish cũ vẫn khả dụng và không thay đổi |
 
 ## Baseline tách domain và kiến trúc Bronze
+
+Phần này chốt ownership và ranh giới giữa shared ingestion engine với domain job. Đây là quyết định kiến trúc hỗ trợ cho Bronze baseline, không thay thế các yêu cầu reliability, quarantine và retry đã nêu ở các phần trước.
 
 ### Phát hiện hiện tại
 
@@ -588,6 +623,8 @@ Bất kỳ implementation nào tạo một platform Bronze job khổng lồ, dup
 
 ## Checklist công việc chính
 
+Checklist dưới đây là danh sách công việc để triển khai các quyết định đã nêu ở trên. Cột “Tiêu chí nghiệm thu / Evidence” là bằng chứng cần tạo trong quá trình thực hiện; checklist không thay thế baseline hoặc Definition of Done.
+
 | Done | Main task | Subtask | Mô tả | Ưu tiên | Status | Tác động hiện tại | Lợi ích sau enhance | Tiêu chí nghiệm thu / Evidence | Dependency |
 |---|---|---|---|---|---|---|---|---|---|
 | [ ] | Orchestration pipeline | Định nghĩa pipeline contract | Xác định stage, input, output, status, chính sách lỗi và schema kết quả | P0 | Not started | Runtime dừng ở Bronze và chưa có contract thống nhất | Mọi stage có hành vi dự đoán được và kết quả machine-readable | Contract được ghi tài liệu; result có status stage và row count | Xác nhận phạm vi |
@@ -626,6 +663,8 @@ Bất kỳ implementation nào tạo một platform Bronze job khổng lồ, dup
 
 ## Thứ tự triển khai đề xuất
 
+Thứ tự dưới đây là thứ tự thực hiện có tính phụ thuộc, không phải thứ tự ưu tiên của các rủi ro trong phần review. Mỗi bước triển khai các task tương ứng trong checklist.
+
 | Thứ tự | Phạm vi | Lý do |
 |---:|---|---|
 | 1 | Mark integration test và document prerequisite môi trường | Tạo baseline test đáng tin cậy ngay lập tức |
@@ -639,6 +678,8 @@ Bất kỳ implementation nào tạo một platform Bronze job khổng lồ, dup
 
 ## Definition of Done cho Phase 4
 
+Definition of Done là điều kiện kết thúc Phase 4 ở cấp tổng thể. Các status, threshold, retry rule và validation rule chi tiết vẫn phải đối chiếu với baseline của từng stage.
+
 - [ ] Có một command được document để chạy Sales pipeline cần thiết.
 - [ ] Health/readiness failure ngăn downstream processing không an toàn.
 - [ ] Mỗi stage trả standard result gồm status, count, duration và error.
@@ -650,6 +691,8 @@ Bất kỳ implementation nào tạo một platform Bronze job khổng lồ, dup
 - [ ] Tài liệu vận hành và checklist này phản ánh đúng behavior đã implement.
 
 ## Nhật ký bằng chứng
+
+Nhật ký này ghi nhận kết quả đã quan sát tại thời điểm review; nó không mặc định rằng các task trong checklist hoặc các mục Definition of Done đã hoàn thành.
 
 | Ngày | Hạng mục | Kết quả | Evidence |
 |---|---|---|---|
