@@ -1,0 +1,371 @@
+# Phase 4E - Orchestration and Delivery Execution Plan
+
+## 1. Purpose
+
+This document translates the approved Phase 4 orchestration and delivery baseline into an implementation scope, impact analysis, task breakdown, and verifiable acceptance criteria.
+
+Phase 4E covers:
+
+1. Implement a health/readiness gate.
+2. Replace the bootstrap placeholder with an idempotent bootstrap and schema readiness check.
+3. Create `PipelineRunner` and a documented CLI.
+4. Add process exit codes and machine-readable summary reports.
+5. Mark integration tests and establish CI checks.
+6. Update README, runbook, checklist, and operational evidence.
+
+Phase 4E coordinates the completed or approved Bronze, Silver, and Gold boundaries. It does not duplicate their transformation, retry, staging, or validation mechanics.
+
+## 2. Dependencies and target workflow
+
+Phase 4E depends on:
+
+- Phase 4A settings, shared result/status contracts, and domain ownership.
+- Phase 4B Bronze jobs, audit, quarantine, staging, publish, retry, and reconciliation.
+- Phase 4C Silver job, validation gate, snapshot/load contract, and atomic publish.
+- Phase 4D Gold job, pre-publish integrity/KPI validation, constraints, and atomic publish.
+
+Target execution order:
+
+```text
+load and validate Settings
+    -> health/readiness gate
+        -> idempotent bootstrap and schema version check
+            -> Bronze domain jobs
+                -> Silver transformation
+                    -> Silver validation gate
+                        -> Gold build
+                            -> Gold integrity/KPI validation
+                                -> Gold publication
+                                    -> summary report and exit code
+```
+
+A failed configuration, health check, bootstrap, required Bronze domain, Silver transformation/validation, Gold build, or Gold validation must produce a non-success result and prevent unsafe downstream execution.
+
+## 3. Baseline and current implementation
+
+### 3.1 Confirmed implementation surface
+
+| Area | Current location | Current behavior | Phase 4E concern |
+|---|---|---|---|
+| Application entrypoint | `main.py` | Creates `App()` and returns `app.run()` | Does not expose CLI options or convert result to process exit code |
+| Application orchestration | `src/app/app.py` | Runs health check, placeholder bootstrap, and Bronze only | No Silver/Gold lifecycle, stage contract, failure policy, or summary |
+| Health service | `src/shared/services/connection_health_service.py` | Checks SQL Server/PostgreSQL and returns `ok`/`degraded` | Health result does not currently gate bootstrap or data processing |
+| Bootstrap | `src/jobs/platform_bootstrap.py` | Returns a hard-coded success response | Does not create/check schemas, metadata, migrations, or schema version |
+| Silver | `scripts/transformation/silver/sales_silver_clean.py` | Standalone full-table transformation | Phase 4C must expose an injectable job for the runner |
+| Gold | `scripts/warehouse/postgres/gold/sales_gold_load.py` | Standalone destructive loader | Phase 4D must expose safe job/service for the runner |
+| Result contract | `src/shared/ingestion/ingestion_models.py` | Shared ingestion statuses and table result shape | Runner needs stage/pipeline result aggregation without losing table context |
+| Test configuration | `pytest.ini` | Defines `pythonpath` and `testpaths` only | No `integration` marker or default unit/integration policy |
+| CI | Repository root | No `.github` directory/workflow was found | Quality checks are not automated |
+| Documentation | `README.md`, Phase 4 docs | Bronze/foundation workflow is described | One-command execution, recovery, exit codes, and CI are not documented |
+
+### 3.2 Falsifiable orchestration hypothesis
+
+The primary orchestration defect is that `App.run()` ignores health status when deciding whether to execute bootstrap and Bronze. A fake service test that returns degraded health and records calls should show that bootstrap and all data jobs are not invoked. A second fake-stage test should show that a failed Silver validation prevents Gold invocation. If either test records downstream calls, the gate belongs in the runner boundary rather than in individual jobs.
+
+### 3.3 Compatibility surface
+
+Unless a separate compatibility decision is recorded, preserve:
+
+- `App(bootstrap_job=None, health_service=None, bronze_job=None, settings=None)` construction and `App.run()` availability.
+- `main.main()` as the application entrypoint.
+- `PlatformBootstrapJob.run()` as a callable bootstrap surface, with its response evolved compatibly where practical.
+- Existing Bronze/Silver/Gold job and script entrypoints through delegating adapters.
+- Existing test commands and import paths during migration.
+
+Compatibility wrappers must delegate to the new runner or service and must not contain a second orchestration implementation.
+
+## 4. Target architecture and contracts
+
+### 4.1 Component boundaries
+
+| Component | Owns | Must not own |
+|---|---|---|
+| Settings boundary | Load `.env`, process overrides, typed validation, safe summary | Stage execution or connection retry |
+| Health/readiness service | Dependency health, required schemas/tables, readiness report | Starting data jobs |
+| `PlatformBootstrapJob` | Idempotent schemas, metadata tables, migrations, version check | Transforming or publishing data |
+| `PipelineRunner` | Stage order, gates, failure policy, result aggregation, report generation | Bronze/Silver/Gold business logic |
+| CLI adapter | Parse mode/stage/log/report options and map result to exit code | Reimplementing runner behavior |
+| Stage jobs | Their own transformation/loading contract | Calling unrelated downstream stages |
+| Summary reporter | JSON/Markdown serialization of run evidence | Hiding or rewriting failed status |
+| Test/CI configuration | Unit/integration selection and quality commands | Making unavailable external services look successful |
+
+### 4.2 Pipeline result contract
+
+`PipelineRunner.run()` must return a machine-readable result with at least:
+
+```text
+run_id, pipeline_name, mode, requested_stages,
+status, started_at, finished_at, duration_ms,
+health, bootstrap, stages, failed_stage,
+rows_read, rows_written, rows_rejected,
+error_type, error_message, report_paths
+```
+
+Each stage result must preserve its standard table/batch results and include:
+
+```text
+stage, status, started_at, finished_at,
+duration_ms, counts, errors, publication_state
+```
+
+Recommended terminal statuses are `SUCCESS`, `SUCCESS_WITH_REJECTIONS`, `PARTIAL_SUCCESS`, and `FAILED`. A pipeline is exit-code success only when every required stage satisfies its success policy.
+
+### 4.3 Required stage policy
+
+| Condition | Runner behavior | Terminal result |
+|---|---|---|
+| Settings validation fails | Stop before health check | `FAILED` |
+| Health/readiness fails | Do not run bootstrap or data stages | `FAILED` |
+| Bootstrap fails/version incompatible | Do not run data stages | `FAILED` |
+| Bronze domain has allowed partial failure | Record all domain results; continue only if policy permits | `PARTIAL_SUCCESS` or `FAILED` |
+| Required Bronze failure | Stop before Silver | `FAILED` |
+| Silver transformation fails | Do not run Silver validation or Gold | `FAILED` |
+| Silver validation fails | Do not run Gold | `FAILED` |
+| Gold build/validation/publish fails | Preserve prior Gold; no success exit | `FAILED` |
+| All required stages pass with no rejection | Write reports and return exit code `0` | `SUCCESS` |
+| Approved rejected rows within policy | Write reports and return policy-defined success-with-rejections result | `SUCCESS_WITH_REJECTIONS` |
+
+## 5. Impact analysis
+
+### 5.1 Code and runtime impact
+
+| Impacted area | Expected change | Risk | Mitigation/evidence |
+|---|---|---|---|
+| `App` | Delegate to `PipelineRunner` while preserving constructor and `run()` | Existing callers may expect current result keys | Compatibility test for constructor, result shape, and injected fakes |
+| Health gate | Treat config/dependency/readiness as a hard precondition | Partial processing may already occur if gate is late | Degraded-health test asserts zero downstream calls |
+| Bootstrap | Replace hard-coded response with idempotent schema/metadata/version operations | Existing database may have partial or older objects | Migration/version tests, non-destructive rerun test, explicit incompatible-version failure |
+| Stage wiring | Inject Bronze/Silver/Gold jobs and validation services | Hidden constructor defaults can make tests require live services | Dependency injection and fake-stage tests |
+| CLI | Add `full`, `incremental` where supported, stage selection, log level, report path, and help | Invalid options could silently select unsafe behavior | Parser tests and strict mode validation |
+| Exit status | Map pipeline result to process code | Automation may treat degraded/partial result as success | Exit-code matrix tests and subprocess smoke test |
+| Reports | Generate JSON and Markdown summaries | Reports may omit failed stage or expose secrets | Fixture tests, schema assertions, and redaction tests |
+| Pytest | Register `integration` marker and separate default commands | Local test run may hit unavailable services | Marker configuration and `pytest -m "not integration"` evidence |
+| CI | Add unit, lint, format, type-check, and optional integration jobs | CI environment may lack database prerequisites | Integration job explicitly provisions/checks services and fails clearly when unavailable |
+| Documentation | Update README, runbook, checklist, and evidence | Docs can drift from CLI behavior | Command/help output and documented recovery steps reviewed together |
+
+### 5.2 Operational impact
+
+- Operators receive one documented command for a full run and explicit stage-selection commands for recovery.
+- Health and schema readiness failures stop processing before any Bronze, Silver, or Gold mutation.
+- Every run has a stable `run_id`, stage status, timing, counts, failure context, report path, and exit code.
+- A failed stage does not masquerade as a successful pipeline because a report was generated.
+- Stage selection must respect dependencies. Running Gold alone requires an explicit valid Silver snapshot/load and readiness policy.
+- Reports contain safe metadata only; passwords, connection strings with credentials, and raw payloads are excluded.
+- Integration failures caused by unavailable PostgreSQL/SQL Server are classified as environment prerequisites, not converted into passing evidence.
+
+### 5.3 Out of scope and decisions required
+
+| Item | Treatment |
+|---|---|
+| New transformation logic | Out of scope; owned by Phase 4B-4D stage jobs |
+| Scheduler deployment | Out of scope; CLI and exit code must be scheduler-ready |
+| Cloud secrets manager | Out of scope; use centralized Settings contract and document secret injection boundary |
+| Unsupported partial stage runs | Must fail clearly; do not infer missing upstream snapshots |
+| Domain partial-success policy | Must be explicit in runner configuration before marking a partial Bronze run successful |
+| Migration rollback policy | Bootstrap must document compatible version checks and non-destructive recovery; destructive rollback is not implicit |
+
+## 6. Task breakdown
+
+### 6.1 Health/readiness gate
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.1.1 | Define readiness contract | Health/readiness result model | Result distinguishes configuration, connectivity, schema, table, and version failures | W1-W3 | Not started |
+| 8.1.2 | Add safe health diagnostics | Sanitized dependency checks | Report includes dependency name/status/reason without credentials | 8.1.1 | Not started |
+| 8.1.3 | Add schema/table readiness checks | Required object inventory | Missing schema/table is reported before any data job starts | W4-W7 | Not started |
+| 8.1.4 | Enforce hard gate | Runner pre-stage gate | Degraded/failed readiness produces no bootstrap or downstream job call | 8.1.2/8.1.3 | Not started |
+| 8.1.5 | Test health gate | Fake health/readiness tests | SQL Server/PostgreSQL failure and missing object scenarios stop processing deterministically | 8.1.4 | Not started |
+
+### 6.2 Real bootstrap and schema versioning
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.2.1 | Inventory bootstrap objects | Schema/metadata inventory | Required Bronze/Silver/Gold/ingestion objects and versions are documented | W0-W7 | Not started |
+| 8.2.2 | Implement idempotent bootstrap | `PlatformBootstrapJob` implementation | Running bootstrap twice creates no destructive changes and returns the same compatible version | 8.2.1 | Not started |
+| 8.2.3 | Add schema version table/check | Version contract | Current version is recorded; incompatible or unsupported version fails clearly | 8.2.2 | Not started |
+| 8.2.4 | Separate DDL and data operations | Bootstrap migration boundary | Bootstrap does not drop published Bronze/Silver/Gold data | 8.2.2 | Not started |
+| 8.2.5 | Test bootstrap failure/retry | Unit and database-backed tests | Partial setup is reported; rerun repairs allowed missing objects without destroying valid data | 8.2.2/8.2.3 | Not started |
+
+### 6.3 Pipeline runner and stage orchestration
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.3.1 | Define stage registry/order | Runner contract | Full order is health -> bootstrap -> Bronze -> Silver -> Silver validation -> Gold -> Gold validation/KPI | 8.1/8.2 | Not started |
+| 8.3.2 | Create `PipelineRunner` | Injectable runner | Runner accepts settings, stage jobs, validators, bootstrap, health service, reporter, and clock dependencies | 8.3.1 | Not started |
+| 8.3.3 | Implement stage selection | Selection policy | Unsupported stage/mode/dependency combination fails before mutation | 8.3.2 | Not started |
+| 8.3.4 | Implement failure policy | Stop/continue policy | Failed required stage blocks dependent stages while preserving prior result context | 8.3.2 | Not started |
+| 8.3.5 | Aggregate counts and statuses | Pipeline result | Stage and table counts/errors are retained without flattening away failed context | 8.3.4 | Not started |
+| 8.3.6 | Test stage sequencing | Fake-stage tests | Success order and every required failure gate are verified without a live database | 8.3.5 | Not started |
+
+### 6.4 CLI, exit codes, and summary reports
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.4.1 | Define CLI contract | `python -m ... --help` or documented command | Help lists mode, stage, log level, report format/path, and prerequisite behavior | 8.3 | Not started |
+| 8.4.2 | Validate CLI options | Strict parser | Invalid mode/stage/log/report options return non-zero without starting the runner | 8.4.1 | Not started |
+| 8.4.3 | Implement exit-code mapping | Exit-code function | `0` only for policy-approved success; configuration, gate, stage, validation, and publish failures are non-zero | 8.3.4 | Not started |
+| 8.4.4 | Generate JSON summary | Versioned JSON schema | Summary contains run identity, stage statuses, counts, durations, failures, and report metadata | 8.3.5 | Not started |
+| 8.4.5 | Generate Markdown summary | Human-readable report | Report identifies failed stage, reason, counts, and publication state without secrets | 8.4.4 | Not started |
+| 8.4.6 | Test subprocess behavior | CLI smoke tests | Success/failure fake runs produce expected report and exit code | 8.4.3-8.4.5 | Not started |
+
+### 6.5 Integration markers and CI
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.5.1 | Classify database tests | `@pytest.mark.integration` usage | Tests requiring PostgreSQL/SQL Server are marked; pure unit tests are not | W0-W7 | Not started |
+| 8.5.2 | Register marker/configuration | `pytest.ini` or project config | Unknown-marker warnings are absent and default unit command is documented | 8.5.1 | Not started |
+| 8.5.3 | Add unit test command | Test command/documentation | `python -m pytest -m "not integration" -q` runs without external services | 8.5.2 | Not started |
+| 8.5.4 | Define CI quality jobs | CI workflow | CI runs unit tests, lint, format, and type check on supported Python version | 8.5.3 | Not started |
+| 8.5.5 | Define integration job | Optional/service-backed CI job | Integration job provisions/checks prerequisites and reports unavailable services clearly | 8.5.4 | Not started |
+| 8.5.6 | Add CI artifact retention | Test/report artifacts | Failed CI preserves test output and pipeline summary for diagnosis without secrets | 8.5.4 | Not started |
+
+### 6.6 README, runbook, checklist, and evidence
+
+| ID | Task | Output | Acceptance criteria | Dependency | Status |
+|---|---|---|---|---|---|
+| 8.6.1 | Document one-command execution | README/runbook command | Command, environment setup, modes, prerequisites, and expected exit codes are accurate | 8.4 | Not started |
+| 8.6.2 | Document recovery paths | Runbook | Health failure, bootstrap mismatch, failed staging, rerun, and report lookup steps are actionable | 8.3/8.4 | Not started |
+| 8.6.3 | Update master checklist | Phase 4 checklist | Phase 4E tasks and statuses link to implementation/evidence files | 8.4-8.6 | Not started |
+| 8.6.4 | Record command/help evidence | Evidence log | CLI help, unit test, CI, and representative failure/success outputs are recorded | 8.4/8.5 | Not started |
+| 8.6.5 | Review docs against runtime | Documentation review | No documented command or status differs from actual behavior | 8.6.1-8.6.4 | Not started |
+
+## 7. Verifiable acceptance criteria
+
+### 7.1 Health and bootstrap
+
+- [ ] Settings are loaded and validated before health checks or stage execution.
+- [ ] Health/readiness checks cover configured SQL Server/PostgreSQL dependencies and required schema/table objects.
+- [ ] Health/readiness failure prevents bootstrap, Bronze, Silver, and Gold calls.
+- [ ] Bootstrap creates/checks required schemas and metadata idempotently.
+- [ ] Bootstrap records and validates schema version; incompatible versions fail clearly and non-destructively.
+- [ ] Bootstrap rerun does not drop or replace published data.
+
+### 7.2 Runner and pipeline gates
+
+- [ ] `PipelineRunner` executes the documented order: health, bootstrap, Bronze, Silver, Silver validation, Gold, Gold validation/KPI.
+- [ ] Runner accepts injected stage dependencies and can be tested without a live database.
+- [ ] Stage selection validates prerequisites and rejects unsupported combinations before mutation.
+- [ ] Silver transformation/validation failure prevents Gold execution.
+- [ ] Gold failure or KPI mismatch produces a failed pipeline result and preserves the last valid Gold publication.
+- [ ] Stage-level errors retain stage, table, dependency, and root-cause context.
+- [ ] Pipeline result aggregates statuses, counts, timings, publication state, and errors without exposing secrets.
+
+### 7.3 CLI, exit code, and reports
+
+- [ ] CLI help documents mode, stage selection, log level, report output, prerequisites, and exit behavior.
+- [ ] Invalid CLI options fail before the runner starts and return non-zero.
+- [ ] Exit code `0` is returned only for policy-approved successful completion.
+- [ ] Health, bootstrap, stage, validation, and publication failures return non-zero.
+- [ ] JSON summary is machine-readable and includes `run_id`, final status, stage results, counts, durations, failure context, and report path.
+- [ ] Markdown summary is readable and identifies failed stage, reason, counts, and publication state.
+- [ ] Reports contain no password, credential-bearing connection string, or full raw payload.
+
+### 7.4 Test separation and CI
+
+- [ ] Database-dependent tests carry the `integration` marker.
+- [ ] `python -m pytest -m "not integration" -q` is deterministic without PostgreSQL/SQL Server.
+- [ ] CI runs unit tests, lint, format, and type-check commands agreed by the repository.
+- [ ] Integration CI explicitly provisions or checks PostgreSQL/SQL Server prerequisites.
+- [ ] Environment-unavailable integration failures are visible and not reported as application success.
+- [ ] CI retains actionable test/report artifacts while excluding secrets.
+
+### 7.5 Documentation and operations
+
+- [ ] README contains the supported one-command pipeline invocation and environment setup.
+- [ ] Runbook documents health failure, bootstrap/version mismatch, rerun, staging cleanup, rollback/preservation, and report lookup.
+- [ ] Phase 4 master checklist links Phase 4E implementation and evidence and does not mark unverified work as done.
+- [ ] Documentation matches actual CLI help, exit codes, report fields, and stage order.
+
+## 8. Test matrix and commands
+
+| Scenario | Test type | Expected result |
+|---|---|---|
+| Valid full run | Unit/fake stages | All stages execute in order, summary is written, exit code is `0` |
+| Settings failure | Unit/CLI | No health or data job call; non-zero exit |
+| Degraded health | Unit | Bootstrap and all downstream stages are not called |
+| Missing schema/table | Unit/integration | Readiness fails before mutation |
+| Bootstrap first run | Integration | Required objects/version are created safely |
+| Bootstrap rerun | Unit/integration | No destructive change; compatible success |
+| Bootstrap incompatible version | Unit/integration | Clear failure; published data unchanged |
+| Bronze failure | Unit | Silver and Gold are not called when Bronze is required |
+| Silver transformation failure | Unit | Silver validation and Gold are not called |
+| Silver validation failure | Unit | Gold is not called; pipeline is failed |
+| Gold/KPI failure | Unit/integration | Non-zero result; previous Gold remains available |
+| Invalid CLI mode/stage | CLI | Parser fails before runner execution |
+| Successful CLI run | CLI/subprocess | JSON/Markdown report generated and exit code `0` |
+| Failed CLI run | CLI/subprocess | Failure report generated and non-zero exit |
+| Unit test selection | CI/local | `pytest -m "not integration"` needs no external service |
+| Integration prerequisite unavailable | CI/integration | Failure is classified and visible, never silently passed |
+| Secret redaction | Unit | Reports/logs contain no credentials or raw payloads |
+
+Suggested commands from repository root:
+
+```powershell
+python -m pytest -m "not integration" -q
+python -m pytest tests/test_architecture_contract.py tests/test_phase4a_w0_contract.py -q
+python -m pytest tests/test_pipeline_runner.py tests/test_pipeline_cli.py tests/test_bootstrap.py tests/test_health_gate.py -q
+python -m pytest -m integration -q
+python -m pytest -q
+```
+
+The focused command names are targets for the implementation. Update them in this document when the final module/test names are approved. Do not claim a command passed until its output is recorded in the evidence log.
+
+## 9. Definition of Done for Phase 4E
+
+Phase 4E is complete only when all applicable items below have implementation and evidence:
+
+- [ ] Health/readiness is a hard gate before bootstrap and data processing.
+- [ ] Bootstrap is real, idempotent, versioned, and non-destructive to published data.
+- [ ] `PipelineRunner` coordinates all required stages with explicit failure policy.
+- [ ] Silver validation and Gold validation/KPI checks are pipeline gates.
+- [ ] CLI supports documented modes/stage selection and rejects invalid options.
+- [ ] Exit code `0` is limited to policy-approved pipeline success.
+- [ ] JSON and Markdown summary reports are generated and redacted.
+- [ ] Integration tests are marked and unit tests run without external services.
+- [ ] CI runs the agreed unit, lint, format, type-check, and integration-aware checks.
+- [ ] README/runbook/checklist reflect actual commands, prerequisites, recovery, and evidence.
+
+Production DoD must not be inferred from a fake-stage success test alone. Health gating, bootstrap idempotency/version checks, failure sequencing, exit codes, report redaction, integration classification, and documentation/runtime agreement all require evidence.
+
+## 10. Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Health result is advisory only | Unsafe partial processing | Hard gate test asserts zero downstream calls |
+| Bootstrap reports success without preparing schema | Late runtime failures | Idempotent DDL/version integration checks |
+| Runner duplicates stage logic | Divergent behavior from jobs | Keep mechanics in stage services and use dependency injection |
+| Stage selection bypasses dependencies | Inconsistent Silver/Gold snapshot | Validate prerequisite graph before execution |
+| Partial result maps to exit `0` | Scheduler records false success | Explicit exit-code matrix and subprocess tests |
+| Reports expose secrets | Credential leakage in artifacts | Safe serializers and redaction tests |
+| Integration tests run by default | Local/CI instability | Register marker and document unit-first command |
+| CI lacks database services | False confidence or opaque failures | Separate service-backed job with prerequisite diagnostics |
+| Docs drift from runtime | Operators run unsafe commands | Compare README/runbook with CLI help in evidence review |
+
+## 11. Evidence log
+
+Update this table after each task. A task may be marked `Done` only after implementation, focused tests, and relevant regression/CI evidence are recorded.
+
+| Date | Task | Files/symbols | Validation command | Result | Status |
+|---|---|---|---|---|---|
+| 2026-09-04 | Create Phase 4E orchestration and delivery scope | `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4_Orchestration&Delivery_execution.md` | Markdown review | Document created; implementation not started | Done |
+| 2026-09-04 | Baseline current orchestration/delivery behavior | `main.py`, `src/app/app.py`, `src/jobs/platform_bootstrap.py`, `connection_health_service.py`, `pytest.ini`, `README.md` | Source/configuration inspection | Health does not gate processing; bootstrap is placeholder; no CLI exit/report contract; no integration marker or CI workflow found | Done |
+| TBD | Implement health/readiness gate | TBD | TBD | TBD | Not started |
+| TBD | Implement idempotent bootstrap/version check | TBD | TBD | TBD | Not started |
+| TBD | Implement `PipelineRunner` and stage failure policy | TBD | TBD | TBD | Not started |
+| TBD | Implement CLI, exit codes, and summary reports | TBD | TBD | TBD | Not started |
+| TBD | Mark integration tests and establish CI | TBD | TBD | TBD | Not started |
+| TBD | Update README/runbook/checklist and run evidence | TBD | TBD | TBD | Not started |
+
+## 12. Related documents
+
+- `docs/internal/phase4_review_enhance_spec.md`
+- `docs/internal/phase4_enhancement_execution_plan_spec.md`
+- `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4a_foundation_execution.md`
+- `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4b_bronzelayer_execution.md`
+- `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4c_silverlayer_execution.md`
+- `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4d_goldlayer_execution.md`
+- `src/app/app.py`
+- `src/jobs/platform_bootstrap.py`
+- `src/shared/services/connection_health_service.py`
+- `main.py`
+- `pytest.ini`
+- `README.md`
