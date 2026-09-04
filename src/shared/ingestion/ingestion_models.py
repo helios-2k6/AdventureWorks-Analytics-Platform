@@ -50,6 +50,18 @@ class TableSpec:
         return f"{self.target_schema}.{self.target_table}"
 
 
+@dataclass(frozen=True)
+class ExtractionBatch:
+    dataframe: Any
+    batch_number: int
+    lower_bound: Any = None
+    upper_bound: Any = None
+
+    @property
+    def row_count(self) -> int:
+        return len(self.dataframe)
+
+
 class IngestionStatus(str, Enum):
     SUCCESS = "SUCCESS"
     SUCCESS_WITH_REJECTIONS = "SUCCESS_WITH_REJECTIONS"

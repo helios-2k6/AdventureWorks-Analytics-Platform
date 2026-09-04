@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Callable, Dict, Iterable, Optional, TypeVar
 
+import pandas as pd
+
 from src.core.settings import Settings, get_settings
 from src.shared.ingestion.ingestion_models import TableSpec
 
@@ -30,11 +32,9 @@ class DomainBronzeJob:
 
         results = {}
         for spec in self.table_specs:
-            df = self.extractor.extract_table(
-                spec.source_schema,
-                spec.source_table,
-                load_date,
-            )
+            batches = self.extractor.iter_table_batches(spec, load_date)
+            frames = [batch.dataframe for batch in batches]
+            df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
             source_count = len(df)
             target_count, success = self.loader.load(
                 df,

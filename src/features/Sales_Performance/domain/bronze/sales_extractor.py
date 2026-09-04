@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.shared.connectors.sql_server_connector import SQLServerConnector
 from src.core.settings import Settings, get_settings
+from src.shared.ingestion.ingestion_models import ExtractionBatch, TableSpec
 
 
 class SalesExtractor:
@@ -21,24 +22,63 @@ class SalesExtractor:
         self.settings = settings or get_settings()
 
     def extract_table(self, source_schema: str, source_table: str, load_date: Optional[datetime] = None):
+        legacy_spec = TableSpec(
+            source_schema=source_schema,
+            source_table=source_table,
+            target_schema="bronze",
+            target_table=source_table.lower(),
+            primary_key="_legacy_row_key",
+            required_columns=("_legacy_row_key",),
+            ordering_key="_legacy_row_key",
+        )
+        batches = self.iter_table_batches(
+            legacy_spec,
+            load_date=load_date,
+            legacy_query=True,
+        )
+        frames = [batch.dataframe for batch in batches]
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def iter_table_batches(
+        self,
+        spec: TableSpec,
+        load_date: Optional[datetime] = None,
+        legacy_query: bool = False,
+    ):
         if load_date is None:
             load_date = datetime.now()
 
-        full_table_name = f"{source_schema}.{source_table}"
+        if not legacy_query and spec.ordering_key is None:
+            raise ValueError("TableSpec ordering_key is required for batch extraction")
+
+        query = f"SELECT * FROM {spec.source_name}"
+        if not legacy_query:
+            query += f" ORDER BY {spec.ordering_key}"
 
         with SQLServerConnector(settings=self.settings) as sql_conn:
             cursor = sql_conn.connection.cursor()
             try:
-                cursor.execute(f"SELECT * FROM {full_table_name}")
+                cursor.execute(query)
                 columns = [description[0] for description in cursor.description]
-                rows = cursor.fetchall()
+                batch_number = 1
+                while True:
+                    rows = cursor.fetchmany(self.settings.batch_size)
+                    if not rows:
+                        break
+                    normalized_rows = [tuple(row) for row in rows]
+                    df = pd.DataFrame(normalized_rows, columns=columns)
+                    self._add_lineage(df, spec.source_name, load_date)
+                    lower_bound, upper_bound = self._batch_bounds(df, spec.ordering_key)
+                    yield ExtractionBatch(df, batch_number, lower_bound, upper_bound)
+                    batch_number += 1
             finally:
                 cursor.close()
 
-        normalized_rows = [tuple(row) for row in rows]
-        df = pd.DataFrame(normalized_rows, columns=columns)
+    def _add_lineage(self, df: pd.DataFrame, source_table: str, load_date: datetime) -> None:
         df["_source_system"] = self.source_system
-        df["_source_table"] = full_table_name
+        df["_source_table"] = source_table
         df["_load_date"] = load_date
 
         def compute_record_hash(row: pd.Series) -> str:
@@ -47,4 +87,9 @@ class SalesExtractor:
             return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
         df["_record_hash"] = df.apply(compute_record_hash, axis=1)
-        return df
+
+    @staticmethod
+    def _batch_bounds(df: pd.DataFrame, ordering_key: str):
+        if ordering_key not in df.columns or df.empty:
+            return None, None
+        return df[ordering_key].iloc[0], df[ordering_key].iloc[-1]
