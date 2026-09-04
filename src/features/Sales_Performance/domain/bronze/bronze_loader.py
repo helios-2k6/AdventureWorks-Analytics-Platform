@@ -5,13 +5,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from src.shared.connectors.postgres_connector import PostgreSQLConnector
+from src.core.settings import Settings, get_settings
 
 
 class BronzeLoader:
     """Load DataFrames into PostgreSQL Bronze tables."""
 
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+
     def load(self, df: pd.DataFrame, target_schema: str, target_table: str, if_exists: str = "replace") -> Tuple[int, bool]:
-        with PostgreSQLConnector() as pg_conn:
+        with PostgreSQLConnector(settings=self.settings) as pg_conn:
             engine = create_engine(
                 "postgresql://",
                 creator=lambda: pg_conn.connection,

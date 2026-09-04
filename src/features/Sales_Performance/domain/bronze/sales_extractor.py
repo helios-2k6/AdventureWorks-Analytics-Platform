@@ -6,13 +6,19 @@ from typing import Optional
 import pandas as pd
 
 from src.shared.connectors.sql_server_connector import SQLServerConnector
+from src.core.settings import Settings, get_settings
 
 
 class SalesExtractor:
     """Extract sales-domain source tables from SQL Server."""
 
-    def __init__(self, source_system: str = "AdventureWorks2012"):
+    def __init__(
+        self,
+        source_system: str = "AdventureWorks2012",
+        settings: Optional[Settings] = None,
+    ):
         self.source_system = source_system
+        self.settings = settings or get_settings()
 
     def extract_table(self, source_schema: str, source_table: str, load_date: Optional[datetime] = None):
         if load_date is None:
@@ -20,7 +26,7 @@ class SalesExtractor:
 
         full_table_name = f"{source_schema}.{source_table}"
 
-        with SQLServerConnector() as sql_conn:
+        with SQLServerConnector(settings=self.settings) as sql_conn:
             cursor = sql_conn.connection.cursor()
             try:
                 cursor.execute(f"SELECT * FROM {full_table_name}")

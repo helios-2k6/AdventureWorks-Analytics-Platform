@@ -15,6 +15,7 @@ pyarrow==18.1.0
 # Logging and utilities
 python-logging-loki==0.3.1
 pydantic==2.8.2
+pydantic-settings==2.4.0
 
 # Testing
 pytest==8.3.4

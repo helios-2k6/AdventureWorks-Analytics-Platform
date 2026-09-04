@@ -1,8 +1,8 @@
 import logging
-import os
 
 import pyodbc
 
+from src.core.settings import Settings, get_settings
 from src.shared.connectors.base_connector import BaseConnector
 
 logger = logging.getLogger(__name__)
@@ -11,15 +11,28 @@ logger = logging.getLogger(__name__)
 class SQLServerConnector(BaseConnector):
     """SQL Server connection handler for AdventureWorks2012."""
 
-    def __init__(self, use_windows_auth: bool = True):
+    def __init__(
+        self,
+        use_windows_auth: bool | None = None,
+        settings: Settings | None = None,
+    ):
         super().__init__()
-        self.host = os.getenv("SQL_SERVER_HOST")
-        self.port = os.getenv("SQL_SERVER_PORT", 1433)
-        self.database = os.getenv("SQL_SERVER_DATABASE", "AdventureWorks2012")
-        self.username = os.getenv("SQL_SERVER_USERNAME")
-        self.password = os.getenv("SQL_SERVER_PASSWORD")
-        self.driver = os.getenv("SQL_SERVER_DRIVER", "ODBC Driver 17 for SQL Server")
-        self.use_windows_auth = use_windows_auth
+        resolved_settings = settings or get_settings()
+        self.host = resolved_settings.sql_server_host
+        self.port = resolved_settings.sql_server_port
+        self.database = resolved_settings.sql_server_database
+        self.username = resolved_settings.sql_server_username
+        self.password = (
+            resolved_settings.sql_server_password.get_secret_value()
+            if resolved_settings.sql_server_password
+            else None
+        )
+        self.driver = resolved_settings.sql_server_driver
+        self.use_windows_auth = (
+            resolved_settings.sql_server_auth_mode == "windows"
+            if use_windows_auth is None
+            else use_windows_auth
+        )
 
     def connect(self) -> bool:
         try:

@@ -4,14 +4,16 @@ from typing import Dict, Optional
 from src.features.Sales_Performance.domain.bronze.bronze_loader import BronzeLoader
 from src.features.Sales_Performance.domain.bronze.bronze_validator import BronzeValidator
 from src.features.Sales_Performance.domain.bronze.sales_extractor import SalesExtractor
+from src.core.settings import Settings, get_settings
 
 
 class SalesBronzeIngestionJob:
     """ETL orchestration for loading sales source tables into Bronze."""
 
-    def __init__(self):
-        self.extractor = SalesExtractor()
-        self.loader = BronzeLoader()
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or get_settings()
+        self.extractor = SalesExtractor(settings=self.settings)
+        self.loader = BronzeLoader(settings=self.settings)
         self.validator = BronzeValidator()
 
     def run(self, mode: str = "full", load_date: Optional[datetime] = None) -> Dict[str, Dict]:

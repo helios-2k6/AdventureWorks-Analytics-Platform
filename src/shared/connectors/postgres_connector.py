@@ -1,9 +1,9 @@
 import logging
-import os
 from typing import Optional
 
 import psycopg2
 
+from src.core.settings import Settings, get_settings
 from src.shared.connectors.base_connector import BaseConnector
 
 logger = logging.getLogger(__name__)
@@ -12,13 +12,14 @@ logger = logging.getLogger(__name__)
 class PostgreSQLConnector(BaseConnector):
     """PostgreSQL connection handler for the analytics warehouse."""
 
-    def __init__(self):
+    def __init__(self, settings: Optional[Settings] = None):
         super().__init__()
-        self.host = os.getenv("POSTGRES_HOST", "localhost")
-        self.port = os.getenv("POSTGRES_PORT", 5432)
-        self.database = os.getenv("POSTGRES_DATABASE", "adventureworks_warehouse")
-        self.username = os.getenv("POSTGRES_USERNAME", "postgres")
-        self.password = os.getenv("POSTGRES_PASSWORD", "postgres")
+        resolved_settings = settings or get_settings()
+        self.host = resolved_settings.postgres_host
+        self.port = resolved_settings.postgres_port
+        self.database = resolved_settings.postgres_database
+        self.username = resolved_settings.postgres_username
+        self.password = resolved_settings.postgres_password.get_secret_value()
 
     def connect(self) -> bool:
         try:

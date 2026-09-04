@@ -1,15 +1,23 @@
 from src.jobs.platform_bootstrap import PlatformBootstrapJob
 from src.features.Sales_Performance.jobs.sales_bronze_ingestion_job import SalesBronzeIngestionJob
 from src.shared.services.connection_health_service import ConnectionHealthService
+from src.core.settings import Settings, get_settings
 
 
 class App:
     """Application bootstrap and orchestration entry point."""
 
-    def __init__(self, bootstrap_job=None, health_service=None, bronze_job=None):
+    def __init__(
+        self,
+        bootstrap_job=None,
+        health_service=None,
+        bronze_job=None,
+        settings: Settings | None = None,
+    ):
+        self.settings = settings or get_settings()
         self.bootstrap_job = bootstrap_job or PlatformBootstrapJob()
-        self.health_service = health_service or ConnectionHealthService()
-        self.bronze_job = bronze_job or SalesBronzeIngestionJob()
+        self.health_service = health_service or ConnectionHealthService(self.settings)
+        self.bronze_job = bronze_job or SalesBronzeIngestionJob(self.settings)
         self._running = False
 
     def run(self):

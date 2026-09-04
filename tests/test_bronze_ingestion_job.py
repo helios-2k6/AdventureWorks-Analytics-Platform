@@ -58,7 +58,7 @@ def test_sales_extractor_converts_row_objects_to_tuples(monkeypatch):
             return FakeCursor()
 
     class FakeSQLConnector:
-        def __init__(self):
+        def __init__(self, settings=None):
             self.connection = FakeConnection()
 
         def __enter__(self):
@@ -107,7 +107,7 @@ def test_sales_extractor_adds_record_hash_lineage(monkeypatch):
             return FakeCursor()
 
     class FakeSQLConnector:
-        def __init__(self):
+        def __init__(self, settings=None):
             self.connection = FakeConnection()
 
         def __enter__(self):
