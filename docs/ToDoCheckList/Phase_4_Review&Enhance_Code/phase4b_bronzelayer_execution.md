@@ -194,11 +194,22 @@ W4.1 implementation evidence:
 
 | ID | Task | Output | Acceptance criteria | Status |
 |---|---|---|---|---|
-| 4.2.1 | Design staging naming/DDL | Run/load-specific staging table | Identifiers are validated; no SQL injection | Not started |
-| 4.2.2 | Write valid rows to staging | Staging writer | Published Bronze is untouched before publish | Not started |
-| 4.2.3 | Write batch audit | Batch audit record/service | Counts, bounds, attempts, status, and commit time are complete | Not started |
+| 4.2.1 | Design staging naming/DDL | Run/load-specific staging table | Identifiers are validated; no SQL injection | In progress |
+| 4.2.2 | Write valid rows to staging | Staging writer | Published Bronze is untouched before publish | Done |
+| 4.2.3 | Write batch audit | Batch audit record/service | Counts, bounds, attempts, status, and commit time are complete | Done |
 | 4.2.4 | Add cleanup/expire | Cleanup policy | Failed/abandoned staging does not remain indefinitely | Not started |
-| 4.2.5 | Test transaction boundary | Fake and database transaction tests | Data commit and checkpoint ordering are proven | Not started |
+| 4.2.5 | Test transaction boundary | Fake and database transaction tests | Data commit and checkpoint ordering are proven | In progress |
+
+Current W4.2 implementation evidence:
+
+- `StagingManager` creates staging names from validated target/run/load identities.
+- `StagingManager.write_batch()` stores batch number, bounds, row count, and rejects duplicate `batch_id` writes.
+- `DomainBronzeJob` writes each extraction batch to staging instead of published Bronze.
+- `AuditService` stores batch/table audit, queries batches by `load_id`, and rejects duplicate batch audits.
+- Staging is not published yet; publish/atomic swap belongs to W4.4.
+- Persistent staging cleanup/expire and database transaction integration tests remain pending.
+- Focused validation: W4.2 staging/audit and Bronze regression -> `17 passed`.
+- Full regression: `python -m pytest -q` -> `62 passed`.
 
 ### W4.3 - Row-level quarantine
 
