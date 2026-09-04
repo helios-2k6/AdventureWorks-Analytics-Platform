@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import json
 import re
 from typing import Any, Optional
 from uuid import uuid4
@@ -73,6 +75,26 @@ class IngestionStatus(str, Enum):
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def deterministic_batch_id(
+    source_table: str,
+    ordering_key: str,
+    lower_bound: Any,
+    upper_bound: Any,
+    source_snapshot: Any,
+) -> str:
+    payload = json.dumps(
+        {
+            "source_table": source_table,
+            "ordering_key": ordering_key,
+            "lower_bound": str(lower_bound),
+            "upper_bound": str(upper_bound),
+            "source_snapshot": str(source_snapshot),
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -173,3 +195,16 @@ class BatchLoadAudit:
     attempt_count: int = 0
     status: IngestionStatus = IngestionStatus.RETRYING
     committed_at: Optional[datetime] = None
+    content_hash: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RejectedRecord:
+    run_id: str
+    load_id: str
+    batch_id: str
+    source_table: str
+    record_key: Optional[str]
+    source_hash: Optional[str]
+    reason: str
+    rejected_at: datetime

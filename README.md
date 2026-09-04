@@ -7,8 +7,9 @@ This repository contains the AdventureWorks data engineering and analytics platf
 - KPI checks passed against the independent Silver-layer baseline.
 - Gold-layer unit tests passed successfully.
 - Phase 4A Foundation W0-W3 is implemented and validated.
-- Foundation tests pass independently of databases; the full regression suite passes with 58 tests.
-- Current implementation branch: `Phase4_A_EnhanceFoundation`.
+- Phase 4B Bronze runtime includes dedicated `bronze_staging`, persistent PostgreSQL audit/quarantine, atomic publish, retry/reconciliation, and staging cleanup lifecycle.
+- Full regression currently passes with 88 tests.
+- Current implementation branch: `phase_4B_EnhanceBronzeLayer`.
 
 ## Project goal
 Build a clean medallion-style warehouse solution around AdventureWorks data with:
@@ -25,7 +26,7 @@ Build a clean medallion-style warehouse solution around AdventureWorks data with
 - docs/: project planning, architecture, checklist, specs, and issue tracking
 - src/: application code and shared pipeline utilities
   - src/core/: centralized typed configuration and core logic
-  - src/shared/ingestion/: shared TableSpec, result, retry, staging, audit, and checkpoint contracts
+  - src/shared/ingestion/: shared TableSpec, result, retry, staging, audit, quarantine, publish, reconciliation, and checkpoint services
   - src/features/Sales_Performance/: Sales domain jobs and Bronze ownership
   - src/features/Production/: Production domain jobs and Bronze ownership
   - src/features/Person/: Person domain jobs and Bronze ownership
@@ -71,7 +72,13 @@ Run the complete regression suite:
 python -m pytest -q
 ```
 
-Latest validation: Foundation `24 passed`; full regression `58 passed`.
+Latest validation: log-redaction `9 passed`; full regression `88 passed`.
+
+## Phase 4B Bronze
+
+Bronze extraction writes valid rows to run/load-specific tables in the PostgreSQL `bronze_staging` schema. Persistent run, table-load, batch-load, checkpoint, and rejected-record evidence is stored in PostgreSQL. Full-table validation gates publication; retry uses deterministic batch identity and database reconciliation to avoid blind appends. Failed or abandoned staging is retained for 24 hours before cleanup, while published staging is removed after audit completion.
+
+Connector error logs contain only safe endpoint and exception-type information. Passwords and raw rejected payloads are excluded from application logs.
 
 ## Phase 4A Foundation
 

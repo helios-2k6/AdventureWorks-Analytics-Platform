@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import text
+
 
 @dataclass(frozen=True)
 class Checkpoint:
@@ -27,3 +29,43 @@ class CheckpointManager:
 
     def get(self, batch_id: str) -> Checkpoint | None:
         return self._checkpoints.get(batch_id)
+
+
+class PostgresCheckpointManager:
+    """Persist checkpoints using the transaction supplied by the data writer."""
+
+    def advance_in_transaction(
+        self, connection, batch_id: str, upper_bound: Any, content_hash: str | None = None
+    ) -> Checkpoint:
+        connection.execute(
+            text(
+                """
+                INSERT INTO bronze.ingestion_checkpoint (batch_id, upper_bound)
+                VALUES (:batch_id, :upper_bound)
+                ON CONFLICT (batch_id) DO UPDATE
+                SET upper_bound = EXCLUDED.upper_bound,
+                    committed_at = CURRENT_TIMESTAMP
+                """
+            ),
+            {"batch_id": batch_id, "upper_bound": str(upper_bound)},
+        )
+        if content_hash is not None:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO bronze.ingestion_batch_registry
+                        (batch_id, content_hash, upper_bound)
+                    VALUES (:batch_id, :content_hash, :upper_bound)
+                    ON CONFLICT (batch_id) DO UPDATE
+                    SET content_hash = EXCLUDED.content_hash,
+                        upper_bound = EXCLUDED.upper_bound,
+                        committed_at = CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "batch_id": batch_id,
+                    "content_hash": content_hash,
+                    "upper_bound": str(upper_bound),
+                },
+            )
+        return Checkpoint(batch_id, upper_bound)

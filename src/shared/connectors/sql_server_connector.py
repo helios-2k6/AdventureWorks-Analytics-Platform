@@ -56,7 +56,13 @@ class SQLServerConnector(BaseConnector):
             logger.info("Connected to SQL Server: %s/%s", self.host, self.database)
             return True
         except Exception as exc:  # pragma: no cover - logging branch
-            logger.error("Failed to connect to SQL Server: %s", exc)
+            logger.error(
+                "Failed to connect to SQL Server at %s:%s/%s (%s)",
+                self.host,
+                self.port,
+                self.database,
+                type(exc).__name__,
+            )
             self.connection = None
             return False
 

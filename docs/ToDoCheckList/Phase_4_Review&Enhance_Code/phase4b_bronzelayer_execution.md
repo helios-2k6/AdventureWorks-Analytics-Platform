@@ -540,42 +540,74 @@ Current W4.2 implementation evidence:
 
 | ID | Task | Output | Acceptance criteria | Status |
 |---|---|---|---|---|
-| 4.3.1 | Define rejected-record contract | `bronze.rejected_records` schema/model | Identity, key/hash, reason, and timestamp are present | Not started |
-| 4.3.2 | Split valid/rejected rows | Row validation boundary | Valid rows continue; rejected rows are not silently dropped | Not started |
-| 4.3.3 | Classify errors | Row/system/schema error policy | System/schema errors fail closed | Not started |
-| 4.3.4 | Add threshold | Rejected threshold configuration/result | Threshold exceeded means `FAILED`, with no publish | Not started |
-| 4.3.5 | Test quarantine/redaction | Unit/integration tests | No full payload in logs; reason is queryable | Not started |
+| 4.3.1 | Define rejected-record contract | `RejectedRecord` and `QuarantineService` | Identity, key/hash, reason, and timestamp are present | Done |
+| 4.3.2 | Split valid/rejected rows | `BronzeValidator.partition_rows()` | Valid rows continue; rejected rows are not silently dropped | Done |
+| 4.3.3 | Classify errors | Row/system/schema error policy | System/schema errors fail closed | Done |
+| 4.3.4 | Add threshold | `BronzeValidator.validate_table()` rejection threshold | Threshold exceeded means validation `FAILED`, with no publish | Done |
+| 4.3.5 | Test quarantine/redaction | `tests/test_bronze_quarantine.py` | No full payload in logs; reason is queryable | Done |
 
 ### W4.4 - Full-table validation and publish
 
 | ID | Task | Output | Acceptance criteria | Status |
 |---|---|---|---|---|
-| 4.4.1 | Extend Bronze validation | Full staging validation report | Schema, lineage, keys, counts, and threshold are checked | Not started |
-| 4.4.2 | Create publish boundary | Atomic publish/swap | Previous Bronze remains unchanged on validation/build failure | Not started |
-| 4.4.3 | Block partial publish | Publish guard | Unvalidated staging cannot be published | Not started |
-| 4.4.4 | Return standard result | Table/run result | Status, counts, attempts, timestamps, and errors are present | Not started |
-| 4.4.5 | Test publish preservation | Regression/integration test | Failed run does not remove valid existing Bronze | Not started |
+| 4.4.1 | Extend Bronze validation | `BronzeValidator.validate_staging()` full staging validation report | Schema, lineage, keys, counts, and threshold are checked | Done |
+| 4.4.2 | Create publish boundary | `StagingManager.publish()` atomic in-memory boundary | Previous Bronze remains unchanged on validation/build failure | Done |
+| 4.4.3 | Block partial publish | `StagingManager.mark_validated()` and `publish()` guards | Unvalidated staging cannot be published | Done |
+| 4.4.4 | Return standard result | `DomainBronzeJob.run()` and `IngestionResult.to_dict()` | Status, counts, attempts, timestamps, and errors are present | Done |
+| 4.4.5 | Test publish preservation | `tests/test_bronze_publish.py` | Failed validation does not remove valid existing Bronze | Done |
+
+Current W4.4 implementation evidence:
+
+- `BronzeValidator.validate_staging()` validates required columns, lineage columns and source-table values, primary-key NULLs, duplicate primary keys, row counts, rejected counts and rejection threshold.
+- `StagingManager.mark_validated()` rejects a failed validation report; `publish()` only accepts validated staging and verifies the target table.
+- Publish updates the staging state and published pointer together in the in-memory contract, so a failed validation cannot replace the previous published staging.
+- `PostgresPublishService` performs the PostgreSQL atomic table swap; integration evidence is recorded in `tests/test_postgres_publish_reconciliation.py`.
+- Focused validation: W4.4 publish/validation plus W4.2/W4.3 tests -> `12 passed`.
+- `DomainBronzeJob.run()` now aggregates extracted batches for full-table validation, publishes only after a passing report, returns standard identity/count/status/timestamp/error fields, and skips publish for an empty source.
+- UUID-based run/load identities are normalized with an `id_` prefix when needed so generated staging identifiers satisfy SQL identifier rules.
+- Focused runtime validation: `python -m pytest tests/test_bronze_publish.py -q` -> `5 passed`.
 
 ### W4.5 - Retry/idempotency/reconciliation
 
 | ID | Task | Output | Acceptance criteria | Status |
 |---|---|---|---|---|
-| 4.5.1 | Connect retry policy to read/write atomic unit | Retry executor integration | Only transient errors are retried | Not started |
-| 4.5.2 | Preserve logical identity | Identity propagation | Attempts use the same run/load/batch IDs | Not started |
-| 4.5.3 | Write checkpoint after commit | Transactional checkpoint | Checkpoint does not advance before data commit | Not started |
-| 4.5.4 | Reconcile unknown commit | Reconciliation service | No blind append after timeout/unknown commit | Not started |
-| 4.5.5 | Protect against duplicates | Unique key/upsert/reconciliation rule | Rerunning the same input creates no duplicates | Not started |
-| 4.5.6 | Test exhaustion/rerun | Retry and idempotency tests | Exhaustion means `FAILED`, with no publish | Not started |
+| 4.5.1 | Connect retry policy to read/write atomic unit | `execute_with_retry()` in `DomainBronzeJob` | Only transient errors are retried | Done |
+| 4.5.2 | Preserve logical identity | `deterministic_batch_id()` and domain propagation | Attempts use the same run/load/batch IDs | Done |
+| 4.5.3 | Write checkpoint after commit | `BronzeLoader.load_batch_transactionally()` and `PostgresCheckpointManager` | Checkpoint does not advance before data commit | Done |
+| 4.5.4 | Reconcile unknown commit | `ReconciliationService` | No blind append after timeout/unknown commit | Done |
+| 4.5.5 | Protect against duplicates | Content-hash-aware `StagingManager.write_batch()` | Rerunning the same input creates no duplicates | Done |
+| 4.5.6 | Test exhaustion/rerun | `tests/test_bronze_retry.py` and retry contract tests | Exhaustion means `FAILED`, with no publish | Done |
+
+Current W4.5 implementation evidence:
+
+- `deterministic_batch_id()` derives a stable SHA-256 identity from source table, ordering key, lower/upper bounds and source snapshot.
+- `DomainBronzeJob` uses the same logical batch identity across loader retry attempts and tracks the attempt count in batch/table results.
+- `execute_with_retry()` retries only transient errors; deterministic errors fail immediately and exhaustion returns a failed domain result.
+- `StagingManager` treats the same batch identity and content hash as idempotent, while a different hash fails closed.
+- `ReconciliationService` returns `SKIP` for an already committed matching batch and `RETRY` only when no batch record exists.
+- `PostgresReconciliationService` resolves durable registry evidence before retry; database integration evidence is recorded in `tests/test_postgres_publish_reconciliation.py`.
+- W4.5 focused validation: `python -m pytest tests/test_bronze_retry.py -q` -> `4 passed`; related Bronze/shared suite -> `24 passed`.
+- `BronzeLoader.load_batch_transactionally()` writes the staging batch and calls `PostgresCheckpointManager.advance_in_transaction()` on the same SQLAlchemy transaction.
+- PostgreSQL integration tests prove successful commit persists both data and checkpoint, while checkpoint failure rolls back batch data.
+- Transaction-aware loader integration is opt-in; legacy `load()` callers remain compatible.
 
 ### W4.6 - Bronze regression
 
 | ID | Task | Output | Acceptance criteria | Status |
 |---|---|---|---|---|
-| 4.6.1 | Update fake-cursor tests | `fetchmany()` fixtures | Batch size, order, and bounds are tested | Not started |
-| 4.6.2 | Run Foundation regression | W0-W3 tests | Existing contracts are not broken and coverage does not decrease | Not started |
-| 4.6.3 | Run Bronze unit tests | Bronze mechanics tests | Unit tests pass without a live database | Not started |
-| 4.6.4 | Run Bronze integration tests | PostgreSQL/SQL Server tests | Service readiness is recorded; failures are classified clearly | Not started |
-| 4.6.5 | Check rerun/failure behavior | Acceptance scenario report | Publish safety, quarantine, retry, and cleanup pass | Not started |
+| 4.6.1 | Update fake-cursor tests | `tests/test_bronze_batch_extractor.py` `fetchmany()` fixtures | Batch size, order, and bounds are tested | Done |
+| 4.6.2 | Run Foundation regression | W0-W3 tests | Existing contracts are not broken and coverage does not decrease | Done |
+| 4.6.3 | Run Bronze unit tests | Bronze mechanics tests | Unit tests pass without a live database | Done |
+| 4.6.4 | Run Bronze integration tests | PostgreSQL/SQL Server tests | Service readiness is recorded; failures are classified clearly | Done |
+| 4.6.5 | Check rerun/failure behavior | `StagingCleanupJob` and acceptance scenario tests | Publish safety, quarantine, retry, and cleanup pass | Done |
+
+W4.6 regression evidence:
+
+- Foundation regression: `python -m pytest tests/test_settings.py tests/test_phase4a_w0_contract.py tests/test_phase4a_w2_domain_ownership.py tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q` -> `26 passed`.
+- Bronze unit/transaction suite: `python -m pytest tests/test_bronze_batch_extractor.py tests/test_bronze_ingestion_job.py tests/test_bronze_quarantine.py tests/test_bronze_publish.py tests/test_bronze_retry.py tests/test_transactional_checkpoint.py -q` -> `21 passed`.
+- SQL Server/PostgreSQL integration suite: `python -m pytest tests/test_phase0_connectivity.py -q` -> `5 passed`.
+- Acceptance tests cover batch order/bounds, quarantine, validation/publish preservation, transient retry, retry exhaustion, idempotency/hash drift, transaction rollback and staging cleanup lifecycle.
+- `StagingCleanupJob` uses an injected evaluation time for immediate retention testing: active/recent failed staging is retained, failed/abandoned staging is expired after 24 hours, and published staging is removed only after audit completion.
 
 ## 5. Dependencies and execution order
 
@@ -641,24 +673,28 @@ Every task marked `Done` must record:
 
 ## 8. Phase 4B Definition of Done
 
-- [ ] Bronze extractor uses `fetchmany(Settings.batch_size)` and stable `ORDER BY`.
-- [ ] Every run/table/batch has logical identity and batch audit.
-- [ ] Valid rows are written to run-specific staging, never directly to published Bronze.
-- [ ] Row-level errors are quarantined with reason and identity; nothing is silently dropped.
-- [ ] Schema/system errors fail closed and are not converted into quarantine rows.
-- [ ] Full-table validation runs before publish.
-- [ ] Existing Bronze remains unchanged when extraction, validation, or publish fails.
-- [ ] Staging is published only after validation passes and through an atomic boundary.
-- [ ] Retry applies only to transient errors and preserves logical identity.
-- [ ] Checkpoints advance only after successful data commit.
-- [ ] Unknown commit outcomes are reconciled before retry.
-- [ ] Rerunning the same input does not create duplicate records.
-- [ ] Retry exhaustion returns `FAILED` and does not publish.
-- [ ] Audit contains counts, bounds, attempts, timestamps, and errors.
-- [ ] Secrets and full payloads do not appear in application logs.
-- [ ] Bronze unit tests run independently of a database.
-- [ ] Bronze integration/regression tests pass, or an environment blocker is recorded clearly.
-- [ ] README, checklist, and evidence reflect the actual Bronze runtime.
+Status: **Production DoD chưa hoàn tất**. Các mục đánh dấu `[x]` là phần đã có implementation và evidence; các mục `[ ]` còn yêu cầu production integration.
+
+- [x] Bronze extractor uses `fetchmany(Settings.batch_size)` and stable `ORDER BY`.
+- [x] Every run/table/batch has logical identity and PostgreSQL-backed audit in production jobs; in-memory audit remains the unit-test double.
+- [x] Valid rows are written to run-specific `bronze_staging` tables, never directly to published Bronze in the domain flow.
+- [x] Row-level errors are quarantined with reason and identity in the domain runtime and persisted by `PostgresQuarantineService` for production jobs.
+- [x] Schema/system errors fail closed and are not converted into quarantine rows in the validation contract.
+- [x] Full-table validation runs before publish.
+- [x] Existing Bronze remains unchanged when validation/publish fails; PostgreSQL atomic publish is implemented by `PostgresPublishService`.
+- [x] Staging is published only after validation passes through in-memory and PostgreSQL atomic boundaries.
+- [x] Retry applies only to transient errors and preserves logical identity.
+- [x] Checkpoints advance only after successful data commit in the transaction-aware loader integration.
+- [x] Unknown commit outcomes are reconciled before retry at the database level by `PostgresReconciliationService` and the durable batch registry.
+- [x] Rerunning the same input does not create duplicate records in the content-hash staging contract.
+- [x] Retry exhaustion returns `FAILED` and does not publish.
+- [x] Audit contains counts, bounds, attempts, timestamps, and errors in PostgreSQL; production jobs inject `PostgresAuditService`.
+- [x] Secrets and full payloads do not appear in application logs; connector errors log only safe endpoint and exception type.
+- [x] Bronze unit tests run independently of a database.
+- [x] Bronze integration/regression tests pass with PostgreSQL and SQL Server available.
+- [x] README, checklist, and evidence reflect all remaining production limitations.
+
+Remaining production gates: none for the listed Phase 4B production gates; README and log-redaction evidence are complete.
 
 ## 9. Risk register
 
@@ -678,6 +714,20 @@ Every task marked `Done` must record:
 | Date | Task | Files/symbols | Validation command | Result | Status |
 |---|---|---|---|---|---|
 | 2026-09-04 | Create English Phase 4B impact and execution document | `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4b_bronzelayer_execution_en.md` | Markdown review | Created | Done |
+| 2026-09-04 | Implement Bronze row-level quarantine contract and rejection threshold | `RejectedRecord`, `QuarantineService`, `BronzeValidator.partition_rows()`, `BronzeValidator.validate_table()` | `python -m pytest tests/test_bronze_quarantine.py tests/test_bronze_ingestion_job.py tests/test_staging_manager.py tests/test_audit_service.py -q` | 12 passed | Done |
+| 2026-09-04 | Implement full-table validation and publish contract | `BronzeValidator.validate_staging()`, `StagingManager.mark_validated()`, `StagingManager.publish()` | `python -m pytest tests/test_bronze_publish.py tests/test_bronze_quarantine.py tests/test_bronze_ingestion_job.py tests/test_staging_manager.py -q` | 12 passed | Done |
+| 2026-09-04 | Complete W4.4.4 standard result and DomainBronzeJob publish flow | `DomainBronzeJob.run()`, `IngestionResult.to_dict()`, `StagingManager._safe_identity()` | `python -m pytest tests/test_bronze_publish.py -q` | 5 passed | Done |
+| 2026-09-04 | Implement W4.5 retry/idempotency/reconciliation contracts | `deterministic_batch_id()`, `ReconciliationService`, `StagingManager.write_batch()`, `DomainBronzeJob` retry integration | `python -m pytest tests/test_bronze_retry.py -q` | 4 passed | Done |
+| 2026-09-04 | Implement W4.5.3 transactional checkpoint boundary | `PostgresCheckpointManager`, `BronzeLoader.load_batch_transactionally()` | `python -m pytest tests/test_transactional_checkpoint.py -q` | 2 passed | Done |
+| 2026-09-04 | Complete W4.6 Bronze regression validation | Foundation, Bronze unit/transaction, and SQL Server/PostgreSQL integration suites | `26 passed`, `21 passed`, `5 passed` | Regression suites passed; cleanup lifecycle verified separately | Done |
+| 2026-09-04 | Complete W4.6.5 staging cleanup and failure lifecycle regression | `StagingCleanupJob`, `StagingManager` lifecycle transitions, `tests/test_staging_cleanup.py` | `python -m pytest tests/test_staging_cleanup.py tests/test_staging_manager.py tests/test_bronze_publish.py tests/test_bronze_retry.py tests/test_bronze_quarantine.py -q` | 19 passed | Done |
+| 2026-09-04 | Wire row-level quarantine into domain runtime | `DomainBronzeJob`, `QuarantineService`, `tests/test_bronze_quarantine.py` | `python -m pytest tests/test_bronze_quarantine.py -q` | 5 passed | Done |
+| 2026-09-04 | Implement persistent audit and rejected-record repositories | `PostgresAuditService`, `PostgresQuarantineService`, `ensure_ingestion_schema()` | `python -m pytest tests/test_persistent_audit_quarantine.py tests/test_bronze_quarantine.py tests/test_bronze_publish.py tests/test_bronze_retry.py tests/test_audit_service.py tests/test_checkpoint_manager.py -q` | 20 passed | Done |
+| 2026-09-04 | Route production Bronze loads to dedicated `bronze_staging` schema | `BronzeLoader.staging_schema`, `ensure_ingestion_schema()`, `StagingManager.create()` | `python -m pytest tests/test_bronze_staging_schema.py -q` | 1 passed | Done |
+| 2026-09-04 | Implement PostgreSQL atomic publish and database reconciliation | `PostgresPublishService`, `PostgresReconciliationService`, `tests/test_postgres_publish_reconciliation.py` | `python -m pytest tests/test_postgres_publish_reconciliation.py -q` | 3 passed | Done |
+| 2026-09-04 | Complete log-redaction integration evidence and README update | `redact_log_message()`, PostgreSQL/SQL Server connector error logging, `tests/test_log_redaction.py`, `README.md` | `python -m pytest tests/test_log_redaction.py tests/test_settings.py -q` | 9 passed | Done |
+| 2026-09-04 | Run refactored pipeline from settings through current Sales Bronze | `main.py` -> `App` -> health -> bootstrap -> `SalesBronzeIngestionJob` | SQL Server/PostgreSQL runtime execution | Health/bootstrap `ok`; 5 Bronze tables `SUCCESS`, validation/publish `true`; 162,629 source/target rows matched | Done |
+| 2026-09-04 | Re-run full regression after end-to-end pipeline | All repository tests | `python -m pytest -q` | 90 passed | Done |
 
 ## 11. Related documents
 
