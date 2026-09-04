@@ -33,7 +33,13 @@ class PostgreSQLConnector(BaseConnector):
             logger.info("Connected to PostgreSQL: %s/%s", self.host, self.database)
             return True
         except Exception as exc:  # pragma: no cover - logging branch
-            logger.error("Failed to connect to PostgreSQL: %s", exc)
+            logger.error(
+                "Failed to connect to PostgreSQL at %s:%s/%s (%s)",
+                self.host,
+                self.port,
+                self.database,
+                type(exc).__name__,
+            )
             self.connection = None
             return False
 

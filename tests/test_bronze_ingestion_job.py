@@ -44,10 +44,16 @@ def test_sales_extractor_converts_row_objects_to_tuples(monkeypatch):
     class FakeCursor:
         description = [("SalesOrderID",), ("CustomerID",), ("OrderDate",)]
 
+        def __init__(self):
+            self.read = False
+
         def execute(self, query):
             return None
 
-        def fetchall(self):
+        def fetchmany(self, size):
+            if self.read or not size:
+                return []
+            self.read = True
             return [FakeRow([101, 42, "2024-01-01"])]
 
         def close(self):
@@ -93,10 +99,16 @@ def test_sales_extractor_adds_record_hash_lineage(monkeypatch):
     class FakeCursor:
         description = [("SalesOrderID",), ("CustomerID",), ("OrderDate",)]
 
+        def __init__(self):
+            self.read = False
+
         def execute(self, query):
             return None
 
-        def fetchall(self):
+        def fetchmany(self, size):
+            if self.read or not size:
+                return []
+            self.read = True
             return [FakeRow([101, 42, "2024-01-01"])]
 
         def close(self):
