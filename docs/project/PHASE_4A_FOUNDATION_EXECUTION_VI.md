@@ -148,11 +148,11 @@ Rules:
 
 ### Definition of Done W1
 
-- [ ] Có một Settings boundary duy nhất.
-- [ ] Connector canonical không còn tự đọc environment.
-- [ ] Auth validation và type validation có unit test.
-- [ ] Password không xuất hiện trong `repr`, log, exception report hoặc summary.
-- [ ] App và dependency nhận Settings qua injection.
+- [x] Có một Settings boundary duy nhất.
+- [x] Connector canonical không còn tự đọc environment.
+- [x] Auth validation và type validation có unit test.
+- [x] Password không xuất hiện trong `repr`, log, exception report hoặc summary.
+- [x] App và dependency nhận Settings qua injection.
 
 ## 6. W2 - Domain ownership và TableSpec
 
@@ -174,13 +174,13 @@ Tên schema/table thực tế phải được đối chiếu với source invent
 
 | ID | Implementation | Acceptance criteria | Test evidence | Status |
 |---|---|---|---|---|
-| 2.1 | Tạo immutable `TableSpec` | Có source/target, primary key, required columns, ordering key, incremental column | Spec validation test | Not started |
-| 2.2 | Tạo Sales specs/job | Sales job chỉ xử lý 5 Sales tables | Ownership test | Not started |
-| 2.3 | Tạo Production job | Product có result độc lập | Domain result test | Not started |
-| 2.4 | Tạo Person job | Person có result độc lập | Domain result test | Not started |
-| 2.5 | Tách shared mechanics | Job cung cấp specs/policy; engine xử lý mechanics | Architecture/import test | Not started |
-| 2.6 | Giữ compatibility wrapper | Wrapper delegate, không có business logic mới | Legacy regression test | Not started |
-| 2.7 | Xác nhận domain isolation | Một domain fail không làm mất result domain khác | Failure isolation test | Not started |
+| 2.1 | Tạo immutable `TableSpec` | Có source/target, primary key, required columns, ordering key, incremental column | Spec validation test | Done |
+| 2.2 | Tạo Sales specs/job | Sales job chỉ xử lý 5 Sales tables | Ownership test | Done |
+| 2.3 | Tạo Production job | Product có result độc lập | Domain result test | Done |
+| 2.4 | Tạo Person job | Person có result độc lập | Domain result test | Done |
+| 2.5 | Tách shared mechanics | Job cung cấp specs/policy; runner xử lý mechanics | Architecture/import test | Done |
+| 2.6 | Giữ compatibility wrapper | Wrapper delegate, không có business logic mới | Legacy regression test | Done |
+| 2.7 | Xác nhận domain isolation | Một domain fail không làm mất result domain khác | Failure isolation test | Done |
 
 ### TableSpec contract
 
@@ -206,11 +206,24 @@ Validation bắt buộc:
 
 ### Definition of Done W2
 
-- [ ] Product và Person không còn nằm trong Sales job canonical.
-- [ ] Table mapping nằm trong specs, không nằm rải rác trong `run()`.
-- [ ] Shared engine không chứa business rule riêng.
-- [ ] Compatibility wrapper chỉ delegate.
-- [ ] Domain ownership và isolation có test.
+- [x] Product và Person không còn nằm trong Sales job canonical.
+- [x] Table mapping nằm trong specs, không nằm rải rác trong `run()`.
+- [x] Shared runner không chứa business rule riêng.
+- [x] Compatibility wrapper chỉ delegate.
+- [x] Domain ownership và isolation có test.
+
+### Kết quả thực thi W2
+
+| Hạng mục | Evidence | Status |
+|---|---|---|
+| `TableSpec` | `src/shared/ingestion/ingestion_models.py`, immutable metadata với identifier validation và qualified names | Done |
+| Sales ownership | `SalesBronzeJob` chỉ khai báo 5 Sales specs | Done |
+| Production ownership | `ProductionBronzeJob` khai báo riêng `Production.Product` | Done |
+| Person ownership | `PersonBronzeJob` khai báo riêng `Person.Person` | Done |
+| Shared mechanics | `DomainBronzeJob` dùng chung extract/load/validate mechanics | Done |
+| Compatibility | `SalesBronzeIngestionJob` delegate sang `SalesBronzeJob`, giữ signature cũ | Done |
+| Focused tests | W0/W2 ownership/spec và Bronze regression -> `11 passed` | Done |
+| Full regression | `python -m pytest -q` -> `48 passed` | Done |
 
 ## 7. W3 - Shared foundation models và services
 
@@ -260,14 +273,14 @@ Status vocabulary tối thiểu: `SUCCESS`, `SUCCESS_WITH_REJECTIONS`, `PARTIAL_
 
 | ID | Implementation | Acceptance criteria | Test evidence | Status |
 |---|---|---|---|---|
-| 3.1 | Tạo status/result models | Bronze/Silver/Gold dùng cùng vocabulary và fields | Model serialization test | Not started |
-| 3.2 | Tạo run/load/batch identity | Retry giữ nguyên logical IDs | Identity test | Not started |
-| 3.3 | Tạo audit models/service contract | Có run/table/batch, counts, attempts, timestamps và errors | Audit contract test | Not started |
-| 3.4 | Tạo `StagingManager` contract | Identifier được validate; published table chưa bị chạm trước publish | Staging safety test | Not started |
-| 3.5 | Tạo error classifier | Phân biệt transient và deterministic | Classifier matrix test | Not started |
-| 3.6 | Tạo retry policy/executor contract | Tối đa 3 attempts, backoff+jitter, injectable clock/sleeper | Retry behavior test | Not started |
-| 3.7 | Tạo checkpoint contract | Checkpoint chỉ advance sau successful commit | Checkpoint ordering test | Not started |
-| 3.8 | Tạo fake fixtures | Foundation tests không cần live database | Fixture smoke test | Not started |
+| 3.1 | Tạo status/result models | Bronze/Silver/Gold dùng cùng vocabulary và fields | Model serialization test | Done |
+| 3.2 | Tạo run/load/batch identity | Retry giữ nguyên logical IDs | Identity test | Done |
+| 3.3 | Tạo audit models/service contract | Có run/table/batch, counts, attempts, timestamps và errors | Audit contract test | Done |
+| 3.4 | Tạo `StagingManager` contract | Identifier được validate; published table chưa bị chạm trước publish | Staging safety test | Done |
+| 3.5 | Tạo error classifier | Phân biệt transient và deterministic | Classifier matrix test | Done |
+| 3.6 | Tạo retry policy/executor contract | Tối đa 3 attempts, backoff+jitter, injectable clock/sleeper | Retry behavior test | Done |
+| 3.7 | Tạo checkpoint contract | Checkpoint chỉ advance sau successful commit | Checkpoint ordering test | Done |
+| 3.8 | Tạo fake fixtures | Foundation tests không cần live database | Fixture smoke test | Done |
 
 ### Invariants cần bảo vệ
 
@@ -281,11 +294,23 @@ Status vocabulary tối thiểu: `SUCCESS`, `SUCCESS_WITH_REJECTIONS`, `PARTIAL_
 
 ### Definition of Done W3
 
-- [ ] Result contract được dùng nhất quán trong foundation.
-- [ ] Retry, staging, audit và checkpoint có boundary rõ.
-- [ ] Identity/retry/commit ordering có test độc lập.
-- [ ] Error classification có matrix cho transient/deterministic cases.
-- [ ] Không cần database thật để chạy foundation unit tests.
+- [x] Result contract được dùng nhất quán trong foundation.
+- [x] Retry, staging, audit và checkpoint có boundary rõ.
+- [x] Identity/retry/commit ordering có test độc lập.
+- [x] Error classification có matrix cho transient/deterministic cases.
+- [x] Không cần database thật để chạy foundation unit tests.
+
+### Kết quả thực thi W3
+
+| Hạng mục | Evidence | Status |
+|---|---|---|
+| Models/contracts | `ingestion_models.py`: status, execution identity, result và audit records | Done |
+| Retry | `retry_policy.py`: classifier, exponential backoff+jitter, max attempts và injectable sleeper | Done |
+| Staging | `staging_manager.py`: identifier validation, validation gate, publish preservation và cleanup | Done |
+| Checkpoint | `checkpoint_manager.py`: không advance trước commit | Done |
+| Audit | `audit_service.py`: run/table/batch history in-memory, không chứa secret | Done |
+| Focused tests | W3 foundation tests -> `10 passed` | Done |
+| Full regression | `python -m pytest -q` -> `58 passed` | Done |
 
 ## 8. Foundation unit tests
 
@@ -349,18 +374,23 @@ Cập nhật bảng này sau mỗi task hoàn thành. Không chuyển `Status` s
 |---|---|---|---|---|---|
 | 2026-09-04 | Tạo execution document | `docs/project/PHASE_4A_FOUNDATION_EXECUTION_VI.md` | Markdown review | Created | Done |
 | 2026-09-04 | Execute W0 baseline/API compatibility | `tests/test_phase4a_w0_contract.py`, `main.py`, `src/app/app.py`, Sales Bronze job | `python -m pytest tests/test_phase4a_w0_contract.py -q` | 3 passed; baseline suite 31 passed, 3 blocked by PostgreSQL unavailable | Done |
+| 2026-09-04 | Execute W1 centralized configuration | `src/core/settings.py`, connectors, App, `.env.example`, `tests/test_settings.py` | `python -m pytest tests/test_settings.py -q` | 7 passed | Done |
+| 2026-09-04 | Execute W2 domain ownership and TableSpec | Domain jobs, shared runner, `tests/test_phase4a_w2_domain_ownership.py` | `python -m pytest tests/test_phase4a_w2_domain_ownership.py -q` | 4 passed | Done |
+| 2026-09-04 | Execute W3 foundation models/services | Shared ingestion models/services and W3 tests | `python -m pytest tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q` | 10 passed | Done |
+| 2026-09-04 | Run Phase 4A foundation suite | W0-W3 foundation tests | `python -m pytest tests/test_settings.py tests/test_phase4a_w0_contract.py tests/test_phase4a_w2_domain_ownership.py tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q` | 24 passed | Done |
+| 2026-09-04 | Run full regression suite | All repository tests | `python -m pytest -q` | 58 passed | Done |
 
 ## 11. Definition of Done Phase 4A
 
-- [ ] W0 baseline và public API compatibility có evidence.
-- [ ] W1 centralized `Settings` hoạt động và được inject.
-- [ ] W2 domain ownership và immutable `TableSpec` được kiểm thử.
-- [ ] W3 result/staging/audit/retry/checkpoint contracts được kiểm thử.
-- [ ] Retry không tạo logical identity mới và checkpoint không advance trước commit.
-- [ ] Secrets không xuất hiện trong log hoặc evidence.
-- [ ] Foundation unit tests chạy độc lập với database.
-- [ ] Regression suite phù hợp pass.
-- [ ] Checklist và README được cập nhật theo runtime thực tế.
+- [x] W0 baseline và public API compatibility có evidence.
+- [x] W1 centralized `Settings` hoạt động và được inject.
+- [x] W2 domain ownership và immutable `TableSpec` được kiểm thử.
+- [x] W3 result/staging/audit/retry/checkpoint contracts được kiểm thử.
+- [x] Retry không tạo logical identity mới và checkpoint không advance trước commit.
+- [x] Secrets không xuất hiện trong log hoặc evidence.
+- [x] Foundation unit tests chạy độc lập với database.
+- [x] Regression suite phù hợp pass.
+- [x] Checklist và README được cập nhật theo runtime thực tế.
 
 ## 12. Tài liệu liên quan
 

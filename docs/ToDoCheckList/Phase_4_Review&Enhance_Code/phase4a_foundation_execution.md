@@ -148,11 +148,11 @@ Rules:
 
 ### W1 Definition of Done
 
-- [ ] One centralized Settings boundary exists.
-- [ ] Canonical connectors no longer read environment variables directly.
-- [ ] Authentication and type validation have unit tests.
-- [ ] Passwords do not appear in `repr`, logs, exception reports, or summaries.
-- [ ] App and dependencies receive Settings through injection.
+- [x] One centralized Settings boundary exists.
+- [x] Canonical connectors no longer read environment variables directly.
+- [x] Authentication and type validation have unit tests.
+- [x] Passwords do not appear in `repr`, logs, exception reports, or summaries.
+- [x] App and dependencies receive Settings through injection.
 
 ## 6. W2 - Domain ownership and TableSpec
 
@@ -174,13 +174,13 @@ Actual schema and table names must be reconciled with the source inventory befor
 
 | ID | Implementation | Acceptance criteria | Test evidence | Status |
 |---|---|---|---|---|
-| 2.1 | Create immutable `TableSpec` | Includes source/target, primary key, required columns, ordering key, and incremental column | Spec validation test | Not started |
-| 2.2 | Create Sales specs/job | Sales job handles only the five Sales tables | Ownership test | Not started |
-| 2.3 | Create Production job | Product has an independent result | Domain result test | Not started |
-| 2.4 | Create Person job | Person has an independent result | Domain result test | Not started |
-| 2.5 | Separate shared mechanics | Jobs provide specs/policy; engine owns mechanics | Architecture/import test | Not started |
-| 2.6 | Preserve compatibility wrapper | Wrapper delegates without new business logic | Legacy regression test | Not started |
-| 2.7 | Confirm domain isolation | One domain failure does not remove another domain's result | Failure isolation test | Not started |
+| 2.1 | Create immutable `TableSpec` | Includes source/target, primary key, required columns, ordering key, and incremental column | Spec validation test | Done |
+| 2.2 | Create Sales specs/job | Sales job handles only the five Sales tables | Ownership test | Done |
+| 2.3 | Create Production job | Product has an independent result | Domain result test | Done |
+| 2.4 | Create Person job | Person has an independent result | Domain result test | Done |
+| 2.5 | Separate shared mechanics | Jobs provide specs/policy; runner owns mechanics | Architecture/import test | Done |
+| 2.6 | Preserve compatibility wrapper | Wrapper delegates without new business logic | Legacy regression test | Done |
+| 2.7 | Confirm domain isolation | One domain failure does not remove another domain's result | Failure isolation test | Done |
 
 ### TableSpec contract
 
@@ -206,11 +206,24 @@ Required validation:
 
 ### W2 Definition of Done
 
-- [ ] Product and Person are not in the canonical Sales job.
-- [ ] Table mappings are defined in specs rather than scattered through `run()`.
-- [ ] The shared engine contains no domain-specific business rules.
-- [ ] Compatibility wrappers only delegate.
-- [ ] Domain ownership and isolation have tests.
+- [x] Product and Person are not in the canonical Sales job.
+- [x] Table mappings are defined in specs rather than scattered through `run()`.
+- [x] The shared runner contains no domain-specific business rules.
+- [x] Compatibility wrappers only delegate.
+- [x] Domain ownership and isolation have tests.
+
+### W2 execution results
+
+| Area | Evidence | Status |
+|---|---|---|
+| `TableSpec` | `src/shared/ingestion/ingestion_models.py`, immutable metadata with identifier validation and qualified names | Done |
+| Sales ownership | `SalesBronzeJob` declares only five Sales specs | Done |
+| Production ownership | `ProductionBronzeJob` declares `Production.Product` separately | Done |
+| Person ownership | `PersonBronzeJob` declares `Person.Person` separately | Done |
+| Shared mechanics | `DomainBronzeJob` provides shared extract/load/validate mechanics | Done |
+| Compatibility | `SalesBronzeIngestionJob` delegates to `SalesBronzeJob` and preserves its signature | Done |
+| Focused tests | W0/W2 ownership/spec and Bronze regression -> `11 passed` | Done |
+| Full regression | `python -m pytest -q` -> `48 passed` | Done |
 
 ## 7. W3 - Shared foundation models and services
 
@@ -260,14 +273,14 @@ Minimum status vocabulary: `SUCCESS`, `SUCCESS_WITH_REJECTIONS`, `PARTIAL_SUCCES
 
 | ID | Implementation | Acceptance criteria | Test evidence | Status |
 |---|---|---|---|---|
-| 3.1 | Create status/result models | Bronze/Silver/Gold use the same vocabulary and fields | Model serialization test | Not started |
-| 3.2 | Create run/load/batch identity | Retries preserve logical IDs | Identity test | Not started |
-| 3.3 | Create audit model/service contract | Run/table/batch, counts, attempts, timestamps, and errors are represented | Audit contract test | Not started |
-| 3.4 | Create `StagingManager` contract | Identifiers are validated; published tables are untouched before publish | Staging safety test | Not started |
-| 3.5 | Create error classifier | Transient and deterministic errors are distinguished | Classifier matrix test | Not started |
-| 3.6 | Create retry policy/executor contract | Maximum three attempts, backoff/jitter, injectable clock/sleeper | Retry behavior test | Not started |
-| 3.7 | Create checkpoint contract | Checkpoint advances only after successful commit | Checkpoint ordering test | Not started |
-| 3.8 | Create fake fixtures | Foundation tests run without a live database | Fixture smoke test | Not started |
+| 3.1 | Create status/result models | Bronze/Silver/Gold use the same vocabulary and fields | Model serialization test | Done |
+| 3.2 | Create run/load/batch identity | Retries preserve logical IDs | Identity test | Done |
+| 3.3 | Create audit model/service contract | Run/table/batch, counts, attempts, timestamps, and errors are represented | Audit contract test | Done |
+| 3.4 | Create `StagingManager` contract | Identifiers are validated; published tables are untouched before publish | Staging safety test | Done |
+| 3.5 | Create error classifier | Transient and deterministic errors are distinguished | Classifier matrix test | Done |
+| 3.6 | Create retry policy/executor contract | Maximum three attempts, backoff/jitter, injectable clock/sleeper | Retry behavior test | Done |
+| 3.7 | Create checkpoint contract | Checkpoint advances only after successful commit | Checkpoint ordering test | Done |
+| 3.8 | Create fake fixtures | Foundation tests run without a live database | Fixture smoke test | Done |
 
 ### Invariants to protect
 
@@ -281,11 +294,23 @@ Minimum status vocabulary: `SUCCESS`, `SUCCESS_WITH_REJECTIONS`, `PARTIAL_SUCCES
 
 ### W3 Definition of Done
 
-- [ ] The result contract is used consistently across foundation components.
-- [ ] Retry, staging, audit, and checkpoint boundaries are explicit.
-- [ ] Identity, retry, and commit ordering have independent tests.
-- [ ] Error classification has transient/deterministic test coverage.
-- [ ] Foundation unit tests run without a live database.
+- [x] The result contract is used consistently across foundation components.
+- [x] Retry, staging, audit, and checkpoint boundaries are explicit.
+- [x] Identity, retry, and commit ordering have independent tests.
+- [x] Error classification has transient/deterministic test coverage.
+- [x] Foundation unit tests run without a live database.
+
+### W3 execution results
+
+| Area | Evidence | Status |
+|---|---|---|
+| Models/contracts | `ingestion_models.py`: status, execution identity, result, and audit records | Done |
+| Retry | `retry_policy.py`: classifier, exponential backoff+jitter, max attempts, and injectable sleeper | Done |
+| Staging | `staging_manager.py`: identifier validation, validation gate, publish preservation, and cleanup | Done |
+| Checkpoint | `checkpoint_manager.py`: cannot advance before commit | Done |
+| Audit | `audit_service.py`: in-memory run/table/batch history with no secrets | Done |
+| Focused tests | W3 foundation tests -> `10 passed` | Done |
+| Full regression | `python -m pytest -q` -> `58 passed` | Done |
 
 ## 8. Foundation unit tests
 
@@ -349,18 +374,23 @@ Update this table after each completed task. Do not set a task to `Done` without
 |---|---|---|---|---|---|
 | 2026-09-04 | Create English execution document | `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4a_foundation_execution.md` | Markdown review | Created | Done |
 | 2026-09-04 | Execute W0 baseline/API compatibility | `tests/test_phase4a_w0_contract.py`, `main.py`, `src/app/app.py`, Sales Bronze job | `python -m pytest tests/test_phase4a_w0_contract.py -q` | 3 passed; baseline suite 31 passed, 3 blocked by unavailable PostgreSQL | Done |
+| 2026-09-04 | Execute W1 centralized configuration | `src/core/settings.py`, connectors, App, `.env.example`, `tests/test_settings.py` | `python -m pytest tests/test_settings.py -q` | 7 passed | Done |
+| 2026-09-04 | Execute W2 domain ownership and TableSpec | Domain jobs, shared runner, `tests/test_phase4a_w2_domain_ownership.py` | `python -m pytest tests/test_phase4a_w2_domain_ownership.py -q` | 4 passed | Done |
+| 2026-09-04 | Execute W3 foundation models/services | Shared ingestion models/services and W3 tests | `python -m pytest tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q` | 10 passed | Done |
+| 2026-09-04 | Run Phase 4A foundation suite | W0-W3 foundation tests | `python -m pytest tests/test_settings.py tests/test_phase4a_w0_contract.py tests/test_phase4a_w2_domain_ownership.py tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q` | 24 passed | Done |
+| 2026-09-04 | Run full regression suite | All repository tests | `python -m pytest -q` | 58 passed | Done |
 
 ## 11. Phase 4A Definition of Done
 
-- [ ] W0 baseline and public API compatibility have evidence.
-- [ ] W1 centralized `Settings` works and is injected.
-- [ ] W2 domain ownership and immutable `TableSpec` are tested.
-- [ ] W3 result/staging/audit/retry/checkpoint contracts are tested.
-- [ ] Retry does not create a new logical identity and checkpoints do not advance before commit.
-- [ ] Secrets do not appear in logs or evidence.
-- [ ] Foundation unit tests run independently of a database.
-- [ ] The appropriate regression suite passes.
-- [ ] The checklist and README reflect actual runtime behavior.
+- [x] W0 baseline and public API compatibility have evidence.
+- [x] W1 centralized `Settings` works and is injected.
+- [x] W2 domain ownership and immutable `TableSpec` are tested.
+- [x] W3 result/staging/audit/retry/checkpoint contracts are tested.
+- [x] Retry does not create a new logical identity and checkpoints do not advance before commit.
+- [x] Secrets do not appear in logs or evidence.
+- [x] Foundation unit tests run independently of a database.
+- [x] The appropriate regression suite passes.
+- [x] The checklist and README reflect actual runtime behavior.
 
 ## 12. Related documents
 

@@ -5,6 +5,7 @@ from src.features.Sales_Performance.domain.bronze.bronze_loader import BronzeLoa
 from src.features.Sales_Performance.domain.bronze.bronze_validator import BronzeValidator
 from src.features.Sales_Performance.domain.bronze.sales_extractor import SalesExtractor
 from src.features.Sales_Performance.jobs.sales_bronze_ingestion_job import (
+    SALES_TABLE_SPECS,
     SalesBronzeIngestionJob,
 )
 from src.jobs.platform_bootstrap import PlatformBootstrapJob
@@ -53,7 +54,8 @@ def test_phase4a_baseline_sales_job_inventory_is_explicit():
         "Customer",
         "SalesTerritory",
         "SalesPerson",
-        "Product",
-        "Person",
     ):
-        assert table_name in source
+        assert any(spec.source_table == table_name for spec in SALES_TABLE_SPECS)
+
+    assert "Product" not in source
+    assert "Person" not in source
