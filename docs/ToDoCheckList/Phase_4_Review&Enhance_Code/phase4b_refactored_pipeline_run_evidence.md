@@ -20,30 +20,30 @@
 
 ```mermaid
 flowchart TD
-  A[main.py] --> B[App.run()]
-  B --> C[get_settings()]
-  C --> D[ConnectionHealthService.check_all()]
+  A[main.py] --> B["App.run()"]
+  B --> C["get_settings()"]
+  C --> D["ConnectionHealthService.check_all()"]
   D --> D1[SQLServerConnector]
   D --> D2[PostgreSQLConnector]
   D1 --> E{Health OK?}
   D2 --> E
   E -->|No| Z[Return degraded result]
-  E -->|Yes| F[PlatformBootstrapJob.run()]
-  F --> G[SalesBronzeIngestionJob.run(full)]
+  E -->|Yes| F["PlatformBootstrapJob.run()"]
+  F --> G["SalesBronzeIngestionJob.run(full)"]
   G --> H[SalesBronzeJob]
-  H --> I[DomainBronzeJob.run()]
+  H --> I["DomainBronzeJob.run()"]
   I --> J[Create run/load identity]
   J --> K[Create bronze_staging table identity]
-  K --> L[SalesExtractor.iter_table_batches()]
-  L --> L1[SQL Server cursor fetchmany(batch_size)]
+  K --> L["SalesExtractor.iter_table_batches()"]
+  L --> L1["SQL Server cursor fetchmany(batch_size)"]
   L1 --> L2[Stable ORDER BY ordering_key]
   L2 --> L3[Lineage and deterministic record hash]
-  L3 --> M[BronzeValidator.partition_rows()]
-  M -->|Schema/system error| N[FAILED; no quarantine; no load]
+  L3 --> M["BronzeValidator.partition_rows()"]
+  M -->|Schema/system error| N["FAILED, no quarantine, no load"]
   M -->|Row-level error| O[PostgresQuarantineService]
   M -->|Valid rows| P{Rejected threshold OK?}
   O --> P
-  P -->|No| Q[FAILED; staging not published]
+  P -->|No| Q["FAILED, staging not published"]
   P -->|Yes| R[PostgresReconciliationService]
   R -->|Matching durable batch| S[SKIP idempotent write]
   R -->|No durable batch| T[BronzeLoader transaction]
@@ -54,8 +54,8 @@ flowchart TD
   S --> U
   U --> V{All batches complete?}
   V -->|No| L
-  V -->|Yes| W[BronzeValidator.validate_staging()]
-  W -->|Fail| X[FAILED; preserve published Bronze]
+  V -->|Yes| W["BronzeValidator.validate_staging()"]
+  W -->|Fail| X["FAILED, preserve published Bronze"]
   W -->|Pass| Y[PostgresPublishService atomic swap]
   Y --> Y1[Move validated table to bronze schema]
   Y1 --> Y2[Mark publish/audit complete]
