@@ -7,7 +7,7 @@ This document translates the Bronze decisions from the Phase 4 review into an im
 Phase 4B includes:
 
 1. Change the Bronze extractor to `fetchmany(10_000)`.
-2. Create staging and batch audit.
+2. Create staging and batch audit.  
 3. Implement row-level quarantine.
 4. Implement full-table validation and publish.
 5. Implement retry, idempotency, and reconciliation.
