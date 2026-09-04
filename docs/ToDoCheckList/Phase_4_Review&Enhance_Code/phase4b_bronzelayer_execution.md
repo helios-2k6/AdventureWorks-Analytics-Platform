@@ -20,6 +20,331 @@ Phase 4B builds on the completed W0-W3 foundation:
 - Immutable `TableSpec`.
 - Shared result, retry, staging, audit, and checkpoint contracts.
 
+## 2.1. Pipeline and component guide
+
+```mermaid
+flowchart LR
+    A[SQL Server source] --> B[SalesExtractor]
+    B --> C[ExtractionBatch]
+    C --> D[Row validation]
+    D --> E[bronze_staging table]
+    E --> F[Batch audit]
+    E --> G[Checkpoint]
+    E --> H[Full-table validation]
+    H -->|Pass| I[Atomic publish/swap]
+    H -->|Fail| J[Keep previous Bronze]
+    I --> K[bronze published table]
+```
+
+The Bronze pipeline has three important layers:
+
+1. **Read and batch**: read source rows without loading the entire table into memory.
+2. **Stage and prove**: write candidate data to run-specific staging, while recording audit and checkpoint evidence.
+3. **Validate and publish**: publish only after the complete staging load passes validation.
+
+### 1. Extractor
+
+File: `src/features/Sales_Performance/domain/bronze/sales_extractor.py`
+
+Responsibilities:
+
+- Read data from SQL Server.
+- Split source data into batches of `Settings.batch_size` rows.
+- Add lineage fields:
+
+```text
+_source_system
+_source_table
+_load_date
+_record_hash
+```
+
+Example for a source table with 25,000 rows:
+
+```text
+Batch 1: rows 1 - 10,000
+Batch 2: rows 10,001 - 20,000
+Batch 3: rows 20,001 - 25,000
+```
+
+The extractor only reads and creates batches. It does not decide whether data is valid for publication.
+
+### 2. Staging
+
+Current contract: `src/shared/ingestion/staging_manager.py`
+
+Staging is temporary data for one run and one table load.
+
+Example:
+
+```text
+Published:
+bronze.sales_order_detail
+
+Staging:
+bronze_staging.sales_order_detail__run123__load456
+```
+
+Purpose:
+
+- Run a new load without changing Bronze currently used by Power BI.
+- Keep the previous Bronze version available if a later batch fails.
+- Publish only after the complete staging table passes validation.
+
+Without staging, a direct `to_sql(..., if_exists="replace")` can leave Bronze empty or partial when a run fails.
+
+### 3. Batch audit
+
+Current contract: `src/shared/ingestion/audit_service.py`
+
+Batch audit is technical execution history, not business data.
+
+Example:
+
+```text
+run_id: run-123
+load_id: load-456
+batch_id: batch-002
+batch_number: 2
+lower_bound: 10001
+upper_bound: 20000
+rows_read: 10000
+rows_written: 10000
+status: SUCCESS
+committed_at: ...
+```
+
+It answers:
+
+- Which batch ran?
+- How many rows were read and written?
+- Which batch failed?
+- How many attempts were made?
+- Where can a restart safely resume?
+- Was the data commit completed?
+
+The current `AuditService` is in-memory. A production implementation must persist audit records in PostgreSQL so evidence survives process restart.
+
+### 4. Checkpoint
+
+Current contract: `src/shared/ingestion/checkpoint_manager.py`
+
+A checkpoint is a progress marker that is known to have been committed successfully.
+
+Example:
+
+```text
+last_committed_order_id = 20000
+```
+
+Required order:
+
+```text
+Write data successfully
+    -> commit
+        -> advance checkpoint
+```
+
+The reverse order is unsafe:
+
+```text
+Advance checkpoint
+    -> data write fails
+```
+
+That sequence can cause the next run to skip rows that were never actually written.
+
+### 5. Batch identity
+
+The identity models are defined in `src/shared/ingestion/ingestion_models.py`.
+
+There are three logical identities:
+
+```text
+run_id   = one pipeline execution
+load_id  = one source-to-target table load within the run
+batch_id = one ordered batch within the table load
+```
+
+Example:
+
+```text
+run_id:   run-001
+load_id:  load-sales-order-detail-001
+batch_id: batch-002
+```
+
+Attempts do not create a new batch identity:
+
+```text
+batch-002 attempt 1
+batch-002 attempt 2
+batch-002 attempt 3
+```
+
+This is what allows retry and reconciliation to avoid duplicates. For production idempotency, `batch_id` must be deterministic from the source table, ordering key, lower/upper bounds, and source snapshot rather than a new random UUID on every rerun.
+
+### 6. Transaction boundary
+
+A transaction is the boundary of operations that must commit or roll back together.
+
+For one batch:
+
+```text
+BEGIN
+  INSERT rows into staging
+  commit data and checkpoint together
+COMMIT
+```
+
+If the write fails:
+
+```text
+ROLLBACK
+checkpoint does not advance
+batch status = FAILED
+```
+
+The locked policy is:
+
+- Data write and checkpoint commit use the same database transaction.
+- Audit is written immediately after the data commit.
+- An audit failure does not roll back committed data; it marks the run/table `FAILED_AUDIT` or `DEGRADED` and triggers alert/retry handling.
+
+### 7. Full-table validation
+
+Full-table validation runs after all batches have been written to staging.
+
+Minimum checks:
+
+- Source and staging row counts or reconciliation counts.
+- Required columns and expected schema.
+- Lineage columns.
+- Primary key and null policy.
+- Duplicate/idempotency key policy.
+- Rejected threshold.
+- Completeness of batch audit.
+
+Flow:
+
+```text
+Batch 1 pass
+Batch 2 pass
+Batch 3 pass
+    -> full-table validation
+        -> pass: publish
+        -> fail: keep previous Bronze
+```
+
+Full-table validation belongs to W4.4, not W4.2.
+
+### 8. Publish
+
+Publish changes a validated staging version into the official Bronze table:
+
+```text
+bronze_staging.sales_order_detail__run123__load456
+    -> bronze.sales_order_detail
+```
+
+Publish occurs only after full-table validation. W4.2 writes and audits staging; W4.4 owns the atomic publish/swap boundary.
+
+### 9. Cleanup and expire
+
+Staging can have these lifecycle states:
+
+```text
+ACTIVE
+PUBLISHED
+FAILED
+EXPIRED
+CLEANED
+```
+
+Locked policy:
+
+- Successfully published staging is cleaned after publish and audit completion.
+- Failed or abandoned staging is retained for 24 hours for investigation/replay.
+- Active staging is not cleaned while its run is active.
+- A cleanup job is required to expire abandoned staging after the retention window.
+
+Without cleanup, every run creates more staging objects and the database accumulates orphaned tables/metadata.
+
+### 10. Reconciliation
+
+Reconciliation handles an unknown commit outcome.
+
+Example:
+
+```text
+Client writes 10,000 rows
+Database commits
+Client times out before receiving the response
+```
+
+Do not blindly retry because the data may already exist.
+
+Required flow:
+
+```text
+Query staging/audit/idempotency key
+    -> batch exists with the same identity/hash: skip insert
+    -> batch does not exist: retry
+    -> same identity with a different hash: fail closed
+```
+
+## Current implementation status
+
+Implemented:
+
+- Batch extractor using `fetchmany()`.
+- In-memory staging metadata and batch tracking.
+- In-memory batch/table audit.
+- Checkpoint contract.
+- Domain runner writing batches to staging.
+- Duplicate batch protection.
+- Unit tests for the foundation contracts.
+
+Not implemented yet:
+
+- PostgreSQL DDL for `bronze_staging` and persistent audit tables.
+- Persistent audit after process restart.
+- Cleanup/expire job with 24-hour retention.
+- Database transaction integration tests.
+- Full-table publish/swap.
+- Production reconciliation service.
+
+## 2.2. Decisions locked for Phase 4B
+
+The following decisions are locked as the Phase 4B implementation baseline. They define physical design and operational policy; they do not mark a task `Done` until code, DDL, and tests exist.
+
+| Topic | Locked decision | Rationale and trade-off |
+|---|---|---|
+| Staging schema | Use a dedicated PostgreSQL schema named `bronze_staging` | Separates temporary data from published Bronze and simplifies permissions/cleanup; requires additional DDL/migration |
+| Staging name | `bronze_staging.<target_table>__<run_id>__<load_id>` after identifier validation | Traceable to a run/load; names are longer and identifiers need length limits |
+| Persistent audit | PostgreSQL is the source of truth; in-memory service is only a test double/cache | Survives restart and is queryable; requires migration, retention, and audit-failure handling |
+| Audit records | Store run, table-load, and batch-load audit | Supports both overview and detailed investigation/resume; creates more records |
+| Batch identity | Deterministic from source table, ordering key, lower/upper bounds, and source snapshot; attempts never create a new ID | Enables rerun/reconciliation; requires stable source bounds |
+| Duplicate batch | Same identity and same content hash is skipped/idempotent; same identity with a different hash fails closed | Safe retry and explicit source drift detection instead of silent overwrite |
+| Transaction boundary | Staging data write and checkpoint commit in one transaction; audit is written immediately after commit | Prevents checkpoint from moving ahead of data; audit may need `AUDIT_FAILED` state after a post-commit failure |
+| Audit failure | Do not roll back committed data; mark run/table `FAILED_AUDIT` or `DEGRADED`, alert, and retry audit | Preserves data integrity without hiding missing evidence |
+| Cleanup/expire | Failed/abandoned staging is retained for 24 hours; published staging is cleaned after audit completion | Provides investigation/replay window; requires a cleanup job and timestamp policy |
+| Empty source | Do not replace published Bronze with an empty table without explicit approval; return a zero-row result | Prevents data loss caused by source outage or incorrect filtering; empty full snapshots require operator approval |
+| Publish | Atomic swap only after full-table validation; W4.2 does not publish | Keeps previous Bronze available when a new run fails; publishing belongs to W4.4 |
+
+### Benefits and limitations of the locked design
+
+- Dedicated `bronze_staging`: safer lifecycle and access control, but requires extra schema/DDL and database permissions.
+- PostgreSQL audit: durable and queryable across restarts, but requires migration and retention policy.
+- Deterministic batch identity: enables real retry/reconciliation, but depends on stable ordering keys and source snapshots.
+- Data/checkpoint in one transaction: prevents checkpoint-before-data, but checkpoint persistence must use the same connection/transaction.
+- Audit after commit: does not roll back data because evidence failed, but requires an explicit audit-failure state and alert/retry mechanism.
+- 24-hour failed-staging retention: supports investigation, but consumes storage; a cleanup job is mandatory.
+
+### W4.2 boundary
+
+W4.2 owns staging identity, batch writes to staging, and batch/table audit. W4.2 does not own Bronze publication, row-level quarantine, or production retry; those belong to W4.3-W4.5.
+
 ## 2. Current baseline
 
 | Area | Current baseline | Impact/risk |
