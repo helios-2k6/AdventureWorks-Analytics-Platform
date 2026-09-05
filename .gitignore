@@ -29,4 +29,6 @@ Thumbs.db
 
 # Internal working documents for project phases
 /docs/internal/
+
+# Ignore test files and directories
 tests/
