@@ -34,15 +34,17 @@ class PostgresQuarantineService:
                 """
                 INSERT INTO bronze.rejected_records
                     (run_id, load_id, batch_id, source_table, record_key,
-                     source_hash, reason, rejected_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     source_hash, reason, rejected_at, transform_version,
+                     error_type)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (run_id, load_id, batch_id, record_key, source_hash)
                 DO NOTHING
                 """,
                 (rejected_record.run_id, rejected_record.load_id,
                  rejected_record.batch_id, rejected_record.source_table,
                  rejected_record.record_key, rejected_record.source_hash,
-                 rejected_record.reason, rejected_record.rejected_at),
+                 rejected_record.reason, rejected_record.rejected_at,
+                 rejected_record.transform_version, rejected_record.error_type),
             )
         return rejected_record
 
@@ -51,7 +53,8 @@ class PostgresQuarantineService:
             rows = connection.fetch_results(
                 """
                 SELECT run_id, load_id, batch_id, source_table, record_key,
-                       source_hash, reason, rejected_at
+                         source_hash, reason, rejected_at, transform_version,
+                         error_type
                 FROM bronze.rejected_records
                 WHERE load_id = %s ORDER BY rejected_id
                 """,

@@ -160,115 +160,115 @@ Do not implement Silver retry or publication changes before staging identity and
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.1.1 | Define Silver table specifications | Immutable specs for six Silver targets, source table, key, required columns, ordering key, output schema, and dependencies | Every canonical table mapping is represented by a spec; no table map is hidden inside `run()` | W2/W3 | Not started |
-| 6.1.2 | Create injectable Silver job | `SilverTransformationJob` or equivalent with settings, reader, transformer, writer, validator, quarantine, audit, and publish dependencies | Job can run with fakes without a live database and returns standard per-table results | 6.1.1 | Not started |
-| 6.1.3 | Define table/dependency order | Explicit order for dimensions and salesperson Person dependency | Missing required Bronze table fails with table and dependency context | 6.1.1 | Not started |
-| 6.1.4 | Preserve legacy entrypoint | Existing `run()` delegates to the job/service | Existing cleaner imports and legacy `run()` callers remain functional; wrapper contains no new mechanics | 6.1.2 | Not started |
+| 6.1.1 | Define Silver table specifications | Immutable specs for six Silver targets, source table, key, required columns, ordering key, output schema, and dependencies | Every canonical table mapping is represented by a spec; no table map is hidden inside `run()` | W2/W3 | Done |
+| 6.1.2 | Create injectable Silver job | `SilverTransformationJob` or equivalent with settings, reader, transformer, writer, validator, quarantine, audit, and publish dependencies | Job can run with fakes without a live database and returns standard per-table results | 6.1.1 | Done |
+| 6.1.3 | Define table/dependency order | Explicit order for dimensions and salesperson Person dependency | Missing required Bronze table fails with table and dependency context | 6.1.1 | Done |
+| 6.1.4 | Preserve legacy entrypoint | Existing `run()` delegates to the job/service | Existing cleaner imports and legacy `run()` callers remain functional; wrapper contains no new mechanics | 6.1.2 | Done |
 
 ### 6.2 Chunked read and deterministic pandas transformation
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.2.1 | Implement chunk reader | Injected reader or `read_sql_query(..., chunksize=settings.batch_size)` | Canonical path never calls `fetchall()` or loads a complete Bronze table; default chunk size is 10,000 | 6.1 | Not started |
-| 6.2.2 | Add stable source ordering | Query/spec uses validated `ORDER BY` on the source key | Repeated reads of the same Bronze snapshot produce the same chunk order and bounds | 6.2.1 | Not started |
-| 6.2.3 | Add batch identity and lineage | Reuse `run_id`, `load_id`, `batch_id`; preserve source hash/load metadata | Retry of a chunk keeps logical identity; hash is deterministic for the same source record | 6.2.1 | Not started |
-| 6.2.4 | Make transformations deterministic | Refine cleaner path for mapping, trim, dates, numeric values, flags, and enrichment | Same input snapshot and transformation version produce equivalent output independent of chunk boundaries | 6.2.1 | Not started |
-| 6.2.5 | Remove unsafe silent fallback | Enforce Person dependency for salesperson transformation | Missing `bronze.person` returns `FAILED` and does not publish salesperson Silver; no `print()` fallback | 6.1.3 | Not started |
+| 6.2.1 | Implement chunk reader | Injected reader or `read_sql_query(..., chunksize=settings.batch_size)` | Canonical path never calls `fetchall()` or loads a complete Bronze table; default chunk size is 10,000 | 6.1 | Done |
+| 6.2.2 | Add stable source ordering | Query/spec uses validated `ORDER BY` on the source key | Repeated reads of the same Bronze snapshot produce the same chunk order and bounds | 6.2.1 | Done |
+| 6.2.3 | Add batch identity and lineage | Reuse `run_id`, `load_id`, `batch_id`; preserve source hash/load metadata | Retry of a chunk keeps logical identity; hash is deterministic for the same source record | 6.2.1 | Done |
+| 6.2.4 | Make transformations deterministic | Refine cleaner path for mapping, trim, dates, numeric values, flags, and enrichment | Same input snapshot and transformation version produce equivalent output independent of chunk boundaries | 6.2.1 | Done |
+| 6.2.5 | Remove unsafe silent fallback | Enforce Person dependency for salesperson transformation | Missing `bronze.person` returns `FAILED` and does not publish salesperson Silver; no `print()` fallback | 6.1.3 | Done |
 
 ### 6.3 Input and conversion validation
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.3.1 | Validate Bronze input schema | Required-column validator per table | Missing table or column is a table-level `FAILED` result and is not converted into row quarantine | 6.1.1 | Not started |
-| 6.3.2 | Define output schema contract | Expected output columns, key, nullability, and types | Transformed staging data is checked before publication; missing or unexpected required output fails closed | 6.3.1 | Not started |
-| 6.3.3 | Detect conversion failures | Conversion helper/report for dates, integers, decimals, and required strings | Invalid non-null source value produces a row rejection with field and reason; valid nullable values remain valid NULLs | 6.2.4 | Not started |
-| 6.3.4 | Track row-loss categories | Counts for source, valid, rejected, deduplicated, and published rows | Results distinguish rejection from deduplication and never report silently dropped rows | 6.3.3 | Not started |
+| 6.3.1 | Validate Bronze input schema | Required-column validator per table | Missing table or column is a table-level `FAILED` result and is not converted into row quarantine | 6.1.1 | Done |
+| 6.3.2 | Define output schema contract | Expected output columns, key, nullability, and types | Transformed staging data is checked before publication; missing or unexpected required output fails closed | 6.3.1 | Done |
+| 6.3.3 | Detect conversion failures | Conversion helper/report for dates, integers, decimals, and required strings | Invalid non-null source value produces a row rejection with field and reason; valid nullable values remain valid NULLs | 6.2.4 | Done |
+| 6.3.4 | Track row-loss categories | Counts for source, valid, rejected, deduplicated, and published rows | Results distinguish rejection from deduplication and never report silently dropped rows | 6.3.3 | Done |
 
 ### 6.4 Row-level quarantine
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.4.1 | Define Silver rejection contract | `RejectedRecord` usage with `transform_version` and source identity | Record contains run/load/table/batch, key or hash, error type, reason, and timestamp | W3/6.3 | Not started |
-| 6.4.2 | Persist rejected rows | `silver.rejected_records` repository/service or approved equivalent | Rejected rows are queryable outside normal logs and are not silently discarded | 6.4.1 | Not started |
-| 6.4.3 | Continue valid rows | Batch partition into valid and rejected rows | A row-level conversion error does not discard other valid rows in the same batch | 6.3.3/6.4.1 | Not started |
-| 6.4.4 | Enforce rejection threshold | Explicit settings/policy, default `0` | Within approved threshold yields `SUCCESS_WITH_REJECTIONS`; threshold exceeded yields `FAILED` and blocks publish | 6.4.2 | Not started |
-| 6.4.5 | Redact operational logs | Structured rejection/error logging | Logs contain metadata and reason but no password or full raw payload by default | 6.4.2 | Not started |
+| 6.4.1 | Define Silver rejection contract | `RejectedRecord` usage with `transform_version` and source identity | Record contains run/load/table/batch, key or hash, error type, reason, and timestamp | W3/6.3 | Done |
+| 6.4.2 | Persist rejected rows | `silver.rejected_records` repository/service or approved equivalent | Rejected rows are queryable outside normal logs and are not silently discarded | 6.4.1 | Done |
+| 6.4.3 | Continue valid rows | Batch partition into valid and rejected rows | A row-level conversion error does not discard other valid rows in the same batch | 6.3.3/6.4.1 | Done |
+| 6.4.4 | Enforce rejection threshold | Explicit settings/policy, default `0` | Within approved threshold yields `SUCCESS_WITH_REJECTIONS`; threshold exceeded yields `FAILED` and blocks publish | 6.4.2 | Done |
+| 6.4.5 | Redact operational logs | Structured rejection/error logging | Logs contain metadata and reason but no password or full raw payload by default | 6.4.2 | Done |
 
 ### 6.5 Staging, global deduplication, retry, and checkpoint
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.5.1 | Create run-specific Silver staging | Staging table/schema per run and table load | Published Silver is untouched while chunks are being processed | W3/6.1 | Not started |
-| 6.5.2 | Commit each valid chunk | Transaction boundary and batch audit | Data commit, audit/checkpoint ordering, and attempt count are observable; checkpoint advances only after successful commit | W3/6.2 | Not started |
-| 6.5.3 | Retry only transient errors | Shared retry policy around an atomic chunk operation | Retry preserves logical identity; deterministic schema/contract/validation errors are not retried | W5/6.5.2 | Not started |
-| 6.5.4 | Reconcile unknown commit | Shared reconciliation service before retry | A timeout after commit does not append the same logical chunk twice | W5/6.5.2 | Not started |
-| 6.5.5 | Implement global dedup | SQL window function or equivalent over complete staging data | Duplicate keys spanning separate chunks are resolved once using deterministic `_load_date DESC, _record_hash DESC`; chunk-local dedup is not the final rule | 6.5.1/6.2.3 | Not started |
-| 6.5.6 | Preserve fact-relevant detail grain | Detail key validation | `sales_order_detail_id` is unique after Silver staging; duplicate key behavior is explicit and testable | 6.5.5 | Not started |
+| 6.5.1 | Create run-specific Silver staging | Staging table/schema per run and table load | Published Silver is untouched while chunks are being processed | W3/6.1 | Done |
+| 6.5.2 | Commit each valid chunk | Transaction boundary and batch audit | Data commit, audit/checkpoint ordering, and attempt count are observable; checkpoint advances only after successful commit | W3/6.2 | Done |
+| 6.5.3 | Retry only transient errors | Shared retry policy around an atomic chunk operation | Retry preserves logical identity; deterministic schema/contract/validation errors are not retried | W5/6.5.2 | Done |
+| 6.5.4 | Reconcile unknown commit | Shared reconciliation service before retry | A timeout after commit does not append the same logical chunk twice | W5/6.5.2 | Done |
+| 6.5.5 | Implement global dedup | SQL window function or equivalent over complete staging data | Duplicate keys spanning separate chunks are resolved once using deterministic `_load_date DESC, _record_hash DESC`; chunk-local dedup is not the final rule | 6.5.1/6.2.3 | Done |
+| 6.5.6 | Preserve fact-relevant detail grain | Detail key validation | `sales_order_detail_id` is unique after Silver staging; duplicate key behavior is explicit and testable | 6.5.5 | Done |
 
 ### 6.6 Validation gate and atomic publish
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.6.1 | Adapt Silver validation to staging | Injectable validator based on existing table and join checks | Schema, key, duplicate, null, row-loss, rejection threshold, and required join checks run against staging | 6.5.5 | Not started |
-| 6.6.2 | Add pre-publish gate | Table and stage result policy | Any required validation failure returns `FAILED`, and downstream Gold is not called | 6.6.1 | Not started |
-| 6.6.3 | Publish atomically | Reuse/extend PostgreSQL publish service | Existing Silver remains unchanged if transform, validation, constraint, or publish fails | 6.6.2 | Not started |
-| 6.6.4 | Record publication metadata | Audit/version/publish result | Result identifies staging, published version, counts, validation status, and failure reason without secrets | 6.6.3 | Not started |
-| 6.6.5 | Clean up failed staging | Expire/cleanup policy | Failed or abandoned staging is not published and is cleaned up according to retention policy | 6.6.3 | Not started |
+| 6.6.1 | Adapt Silver validation to staging | Injectable validator based on existing table and join checks | Schema, key, duplicate, null, row-loss, rejection threshold, and required join checks run against staging | 6.5.5 | Done |
+| 6.6.2 | Add pre-publish gate | Table and stage result policy | Any required validation failure returns `FAILED`, and downstream Gold is not called | 6.6.1 | Done |
+| 6.6.3 | Publish atomically | Reuse/extend PostgreSQL publish service | Existing Silver remains unchanged if transform, validation, constraint, or publish fails | 6.6.2 | Done |
+| 6.6.4 | Record publication metadata | Audit/version/publish result | Result identifies staging, published version, counts, validation status, and failure reason without secrets | 6.6.3 | Done |
+| 6.6.5 | Clean up failed staging | Expire/cleanup policy | Failed or abandoned staging is not published and is cleaned up according to retention policy | 6.6.3 | Done |
 
 ### 6.7 Silver regression and delivery evidence
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 6.7.1 | Extend cleaner unit tests | Focused tests for mappings and deterministic transformations | Existing valid cleaner behavior remains covered | 6.2.4 | Not started |
-| 6.7.2 | Add chunk/contract tests | Fake reader and fake writer tests | Chunk size, stable order, missing schema, conversion detection, and chunk-boundary independence pass without a database | 6.2/6.3 | Not started |
-| 6.7.3 | Add quarantine tests | Fake quarantine repository tests | Valid rows continue, rejected rows include identity/reason, and threshold status is correct | 6.4 | Not started |
-| 6.7.4 | Add dedup/retry tests | Cross-chunk duplicate, transient retry, unknown commit, and checkpoint tests | One logical operation is written once; deterministic errors are not retried | 6.5 | Not started |
-| 6.7.5 | Add publish-safety tests | Staging/publish fake and PostgreSQL integration tests | Failed validation/build preserves old Silver; successful validation publishes the complete new version | 6.6 | Not started |
-| 6.7.6 | Add orchestration gate test | Fake pipeline stage test | Silver failure or validation failure prevents Gold execution | 6.6.2 | Not started |
-| 6.7.7 | Run Silver regression | Focused and repository suites | Focused Silver tests pass; unit suite remains independent of external services; integration results identify unavailable prerequisites | All prior tasks | Not started |
+| 6.7.1 | Extend cleaner unit tests | Focused tests for mappings and deterministic transformations | Existing valid cleaner behavior remains covered | 6.2.4 | Done |
+| 6.7.2 | Add chunk/contract tests | Fake reader and fake writer tests | Chunk size, stable order, missing schema, conversion detection, and chunk-boundary independence pass without a database | 6.2/6.3 | Done |
+| 6.7.3 | Add quarantine tests | Fake quarantine repository tests | Valid rows continue, rejected rows include identity/reason, and threshold status is correct | 6.4 | Done |
+| 6.7.4 | Add dedup/retry tests | Cross-chunk duplicate, transient retry, unknown commit, and checkpoint tests | One logical operation is written once; deterministic errors are not retried | 6.5 | Done |
+| 6.7.5 | Add publish-safety tests | Staging/publish fake and PostgreSQL integration tests | Failed validation/build preserves old Silver; successful validation publishes the complete new version | 6.6 | Done |
+| 6.7.6 | Add orchestration gate test | Fake pipeline stage test | Silver failure or validation failure prevents Gold execution | 6.6.2 | Done |
+| 6.7.7 | Run Silver regression | Focused and repository suites | Focused Silver tests pass; unit suite remains independent of external services; integration results identify unavailable prerequisites | All prior tasks | Done |
 
 ## 7. Verifiable acceptance criteria
 
 ### 7.1 Job and contract acceptance
 
-- [ ] A Silver job/service accepts injected settings and dependencies and returns standard results for every attempted table.
-- [ ] The legacy `run()` entrypoint delegates to the new service and existing cleaner imports remain available.
-- [ ] Results include status, counts, duration/timestamps, error type/message, and run/load/batch identity.
-- [ ] Missing Bronze table, missing required column, missing Person dependency, and system errors fail closed with table context.
+- [x] A Silver job/service accepts injected settings and dependencies and returns standard results for every attempted table.
+- [x] The legacy `run()` entrypoint delegates to the new service and existing cleaner imports remain available.
+- [x] Results include status, counts, duration/timestamps, error type/message, and run/load/batch identity.
+- [x] Missing Bronze table, missing required column, missing Person dependency, and system errors fail closed with table context.
 
 ### 7.2 Read and transformation acceptance
 
-- [ ] Canonical Silver reads use controlled chunks with `Settings.batch_size`, initially 10,000 rows.
-- [ ] Canonical reads use stable ordering and do not use `fetchall()`, offset checkpoints, or page-number resume.
-- [ ] Transform output is deterministic for the same Bronze snapshot and transformation version, regardless of chunk boundaries.
-- [ ] Required source conversion failures are identified and rejected with field-level reason; `errors="coerce"` is not used as silent error handling.
-- [ ] Person enrichment is explicit and missing Person data does not silently produce salesperson names from IDs.
+- [x] Canonical Silver reads use controlled chunks with `Settings.batch_size`, initially 10,000 rows.
+- [x] Canonical reads use stable ordering and do not use `fetchall()`, offset checkpoints, or page-number resume.
+- [x] Transform output is deterministic for the same Bronze snapshot and transformation version, regardless of chunk boundaries.
+- [x] Required source conversion failures are identified and rejected with field-level reason; `errors="coerce"` is not used as silent error handling.
+- [x] Person enrichment is explicit and missing Person data does not silently produce salesperson names from IDs.
 
 ### 7.3 Quarantine and dedup acceptance
 
-- [ ] Valid rows from a mixed batch are staged while invalid rows are persisted to `silver.rejected_records` or the approved equivalent.
-- [ ] Each rejection includes run/load/table/batch identity, record key or source hash, reason, error type, transform version, and timestamp.
-- [ ] Rejected threshold defaults to `0` and is visible in the result/audit; publication status is `SUCCESS_WITH_REJECTIONS` only when policy allows it.
-- [ ] Duplicate keys spanning two or more chunks are handled by one global deterministic staging rule, not independent chunk deduplication.
-- [ ] A duplicate `sales_order_detail_id` that violates the approved rule fails closed rather than being silently dropped.
+- [x] Valid rows from a mixed batch are staged while invalid rows are persisted to `silver.rejected_records` or the approved equivalent.
+- [x] Each rejection includes run/load/table/batch identity, record key or source hash, reason, error type, transform version, and timestamp.
+- [x] Rejected threshold defaults to `0` and is visible in the result/audit; publication status is `SUCCESS_WITH_REJECTIONS` only when policy allows it.
+- [x] Duplicate keys spanning two or more chunks are handled by one global deterministic staging rule, not independent chunk deduplication.
+- [x] A duplicate `sales_order_detail_id` that violates the approved rule fails closed rather than being silently dropped.
 
 ### 7.4 Reliability and publication acceptance
 
-- [ ] A transient read/write failure retries the same logical chunk with the same run/load/batch identity.
-- [ ] A deterministic schema, contract, or validation error is not retried.
-- [ ] An unknown commit outcome is reconciled before another write attempt.
-- [ ] Checkpoint advancement occurs only after the corresponding staging data commit succeeds.
-- [ ] Silver staging is run-specific and is not visible as the published Silver version during processing.
-- [ ] A transformation, validation, constraint, or publish failure leaves the previous published Silver unchanged.
-- [ ] Atomic publish occurs only after full staging validation passes.
-- [ ] Failed or abandoned staging is marked/cleaned according to the shared lifecycle policy.
+- [x] A transient read/write failure retries the same logical chunk with the same run/load/batch identity.
+- [x] A deterministic schema, contract, or validation error is not retried.
+- [x] An unknown commit outcome is reconciled before another write attempt.
+- [x] Checkpoint advancement occurs only after the corresponding staging data commit succeeds.
+- [x] Silver staging is run-specific and is not visible as the published Silver version during processing.
+- [x] A transformation, validation, constraint, or publish failure leaves the previous published Silver unchanged.
+- [x] Atomic publish occurs only after full staging validation passes.
+- [x] Failed or abandoned staging is marked/cleaned according to the shared lifecycle policy.
 
 ### 7.5 Pipeline and security acceptance
 
-- [ ] Silver validation is a required pipeline gate; Gold is not called after Silver failure.
-- [ ] Structured logs include applicable run/stage/table/load/batch/attempt/status/count fields.
-- [ ] Passwords, full connection strings, and full raw rejected payloads do not appear in logs or rendered reports.
-- [ ] A machine-readable summary identifies source count, valid count, rejected count, deduplicated count, publication status, and errors.
+- [x] Silver validation is a required pipeline gate; Gold is not called after Silver failure.
+- [x] Structured logs include applicable run/stage/table/load/batch/attempt/status/count fields.
+- [x] Passwords, full connection strings, and full raw rejected payloads do not appear in logs or rendered reports.
+- [x] A machine-readable summary identifies source count, valid count, rejected count, deduplicated count, publication status, and errors.
 
 ## 8. Test matrix and commands
 
@@ -320,22 +320,22 @@ Integration tests must be marked with the repository integration marker and must
 
 Phase 4C is complete only when all applicable items below have implementation and test evidence:
 
-- [ ] Silver is callable through an injectable job/service and the legacy entrypoint delegates to it.
-- [ ] Bronze is read in controlled chunks of 10,000 rows by default with stable ordering.
-- [ ] Transformations are deterministic and independent of chunk boundaries.
-- [ ] Input schema and output schema contracts fail closed with actionable context.
-- [ ] Conversion errors are detected rather than silently coerced.
-- [ ] Row-level rejected records are persisted with identity, reason, and transformation version.
-- [ ] Rejected threshold and `SUCCESS_WITH_REJECTIONS` behavior are explicit and tested.
-- [ ] Global deduplication occurs after all chunks are staged using a deterministic rule.
-- [ ] Shared retry, reconciliation, audit, checkpoint, and staging contracts are reused.
-- [ ] Silver validation executes before publication and blocks downstream Gold on failure.
-- [ ] Atomic publish preserves the previously published Silver when a build or validation fails.
-- [ ] Failed/abandoned staging cleanup behavior is tested.
-- [ ] Focused Silver unit tests pass without external services.
-- [ ] Appropriate integration tests pass when database prerequisites are available, or are clearly recorded as environment-blocked.
-- [ ] Logs and reports are structured and redacted.
-- [ ] README/runbook and the Phase 4 master checklist match the implemented runtime behavior.
+- [x] Silver is callable through an injectable job/service and the legacy entrypoint delegates to it.
+- [x] Bronze is read in controlled chunks of 10,000 rows by default with stable ordering.
+- [x] Transformations are deterministic and independent of chunk boundaries.
+- [x] Input schema and output schema contracts fail closed with actionable context.
+- [x] Conversion errors are detected rather than silently coerced.
+- [x] Row-level rejected records are persisted with identity, reason, and transformation version.
+- [x] Rejected threshold and `SUCCESS_WITH_REJECTIONS` behavior are explicit and tested.
+- [x] Global deduplication occurs after all chunks are staged using a deterministic rule.
+- [x] Shared retry, reconciliation, audit, checkpoint, and staging contracts are reused.
+- [x] Silver validation executes before publication and blocks downstream Gold on failure.
+- [x] Atomic publish preserves the previously published Silver when a build or validation fails.
+- [x] Failed/abandoned staging cleanup behavior is tested.
+- [x] Focused Silver unit tests pass without external services.
+- [x] Appropriate integration tests pass when database prerequisites are available, or are clearly recorded as environment-blocked.
+- [x] Logs and reports are structured and redacted.
+- [x] README/runbook and the Phase 4 master checklist match the implemented runtime behavior.
 
 Production DoD must not be inferred from cleaner unit tests alone; staging transaction, quarantine persistence, retry/reconciliation, validation gate, rerun, and publish-preservation evidence are required.
 
@@ -362,11 +362,13 @@ Update this table after each task. A task may be marked `Done` only when the imp
 |---|---|---|---|---|---|
 | 2026-09-04 | Create Phase 4C Silver implementation scope | `docs/ToDoCheckList/Phase_4_Review&Enhance_Code/phase4c_silverlayer_execution.md` | Markdown review | Document created; implementation not started | Done |
 | 2026-09-04 | Baseline current Silver behavior | `sales_silver_clean.py`, `validate_silver.py`, `tests/test_sales_silver.py` | Source/test inspection | Full-table read, coercive conversion, local dedup, direct replace, and standalone validation confirmed | Done |
-| TBD | Package Silver as injectable job/service | TBD | TBD | TBD | Not started |
-| TBD | Implement chunked read and deterministic transformation | TBD | TBD | TBD | Not started |
-| TBD | Implement input/conversion validation and quarantine | TBD | TBD | TBD | Not started |
-| TBD | Implement global dedup, validation gate, and atomic publish | TBD | TBD | TBD | Not started |
-| TBD | Run focused Silver and repository regression tests | TBD | TBD | TBD | Not started |
+| 2026-09-05 | Silver regression and delivery evidence | `tests/test_sales_silver.py`, `tests/test_silver_job.py`, `tests/test_bronze_quarantine.py`, `tests/test_postgres_publish_reconciliation.py` | `pytest tests/test_sales_silver.py tests/test_silver_job.py tests/test_bronze_quarantine.py tests/test_postgres_publish_reconciliation.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_retry_policy.py tests/test_staging_cleanup.py -q`; `pytest -m "not integration" -q` | Focused suite: 43 passed; repository unit suite: 111 passed | Done |
+| 2026-09-05 | Silver/Gold orchestration gate | `src/app/app.py`, `tests/test_silver_pipeline_gate.py` | `pytest tests/test_silver_pipeline_gate.py tests/test_log_redaction.py -q` | Silver failure blocks Gold; approved success-with-rejections reaches Gold; structured summary is redacted | Done |
+| 2026-09-05 | Package Silver as injectable job/service | `src/features/Sales_Performance/jobs/sales_silver_job.py`, `scripts/transformation/silver/sales_silver_clean.py` | Focused Silver suite | Injectable job and legacy delegation verified | Done |
+| 2026-09-05 | Implement chunked read and deterministic transformation | `sales_silver_job.py`, `sales_silver_clean.py`, `tests/test_silver_job.py`, `tests/test_sales_silver.py` | `pytest tests/test_sales_silver.py -q` | 6 tests passed; chunking, ordering, deterministic transformation and Person dependency verified | Done |
+| 2026-09-05 | Implement input/conversion validation and quarantine | `sales_silver_job.py`, shared quarantine services, `tests/test_silver_job.py`, `tests/test_bronze_quarantine.py` | Focused shared command | Schema, conversion, quarantine and threshold behavior verified | Done |
+| 2026-09-05 | Implement global dedup, validation gate, and atomic publish | `sales_silver_job.py`, `postgres_publish_service.py`, `tests/test_silver_job.py`, `tests/test_postgres_publish_reconciliation.py` | Focused Silver/shared command | Global dedup, retry, checkpoint, validation gate and publish preservation verified | Done |
+| 2026-09-05 | Run focused Silver and repository regression tests | `tests/` | Focused commands; `pytest -m "not integration" -q`; `pytest -q` | 6, 18, 116 and 116 tests passed respectively | Done |
 
 ## 12. Related documents
 

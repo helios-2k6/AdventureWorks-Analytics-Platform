@@ -30,6 +30,13 @@ class CheckpointManager:
     def get(self, batch_id: str) -> Checkpoint | None:
         return self._checkpoints.get(batch_id)
 
+    def latest_for_load(self, batch_ids: list[str] | tuple[str, ...]) -> Checkpoint | None:
+        for batch_id in reversed(batch_ids):
+            checkpoint = self.get(batch_id)
+            if checkpoint is not None:
+                return checkpoint
+        return None
+
 
 class PostgresCheckpointManager:
     """Persist checkpoints using the transaction supplied by the data writer."""
@@ -69,3 +76,21 @@ class PostgresCheckpointManager:
                 },
             )
         return Checkpoint(batch_id, upper_bound)
+
+    def get(self, batch_id: str) -> Checkpoint | None:
+        from src.shared.connectors.postgres_connector import PostgreSQLConnector
+
+        with PostgreSQLConnector() as connection:
+            rows = connection.fetch_results(
+                "SELECT batch_id, upper_bound FROM bronze.ingestion_checkpoint "
+                "WHERE batch_id = %s",
+                (batch_id,),
+            )
+        return Checkpoint(*rows[0]) if rows else None
+
+    def latest_for_load(self, batch_ids: list[str] | tuple[str, ...]) -> Checkpoint | None:
+        for batch_id in reversed(batch_ids):
+            checkpoint = self.get(batch_id)
+            if checkpoint is not None:
+                return checkpoint
+        return None

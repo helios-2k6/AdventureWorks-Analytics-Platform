@@ -8,7 +8,8 @@ This repository contains the AdventureWorks data engineering and analytics platf
 - Gold-layer unit tests passed successfully.
 - Phase 4A Foundation W0-W3 is implemented and validated.
 - Phase 4B Bronze runtime includes dedicated `bronze_staging`, persistent PostgreSQL audit/quarantine, atomic publish, retry/reconciliation, and staging cleanup lifecycle.
-- Full regression currently passes with 88 tests.
+- Phase 4C Silver runtime includes injectable jobs, chunked deterministic reads, schema/conversion validation, quarantine, run-specific staging, global deduplication, retry/reconciliation/checkpoints, validation-gated atomic publish, and Silver-to-Gold gate tests.
+- Full regression currently passes with 116 tests.
 - Current implementation branch: `phase_4B_EnhanceBronzeLayer`.
 
 ## Project goal
@@ -72,7 +73,20 @@ Run the complete regression suite:
 python -m pytest -q
 ```
 
-Latest validation: log-redaction `9 passed`; full regression `88 passed`.
+Latest validation: log-redaction `9 passed`; full regression `116 passed`.
+
+Phase 4C validation evidence:
+
+```powershell
+python -m pytest tests/test_sales_silver.py -q
+python -m pytest tests/test_sales_silver.py tests/test_ingestion_models.py tests/test_retry_policy.py tests/test_staging_manager.py tests/test_checkpoint_manager.py tests/test_audit_service.py -q
+python -m pytest -m "not integration" -q
+python -m pytest -q
+```
+
+Latest Phase 4C results: `6 passed`, `18 passed`, `116 passed`, and full regression `116 passed`. The repository currently has no tests marked `integration`, so no database prerequisite was skipped by the complete suite.
+
+The injectable `SilverGoldPipeline` blocks Gold when Silver validation fails, permits approved `SUCCESS_WITH_REJECTIONS`, emits machine-readable counts, and logs redacted structured summaries.
 
 ## Phase 4B Bronze
 

@@ -19,6 +19,12 @@ class BronzeLoader:
 
     def load(self, df: pd.DataFrame, target_schema: str, target_table: str, if_exists: str = "replace") -> Tuple[int, bool]:
         with PostgreSQLConnector(settings=self.settings) as pg_conn:
+            with pg_conn.connection.cursor() as cursor:
+                cursor.execute(
+                    "SET statement_timeout = %s",
+                    (self.settings.bronze_query_timeout_seconds * 1000,),
+                )
+            pg_conn.connection.commit()
             engine = create_engine(
                 "postgresql://",
                 creator=lambda: pg_conn.connection,
@@ -35,6 +41,19 @@ class BronzeLoader:
             )
             return len(df), True
 
+    def read_staging(self, staging_table: str, spec) -> pd.DataFrame:
+        """Read the complete run-specific staging table for resume validation."""
+        with PostgreSQLConnector(settings=self.settings) as pg_conn:
+            engine = create_engine(
+                "postgresql://",
+                creator=lambda: pg_conn.connection,
+                poolclass=StaticPool,
+            )
+            return pd.read_sql_query(
+                f'SELECT * FROM "{self.staging_schema}"."{staging_table}"',
+                engine,
+            )
+
     def load_batch_transactionally(
         self,
         df: pd.DataFrame,
@@ -48,6 +67,12 @@ class BronzeLoader:
     ) -> Tuple[int, bool]:
         """Write one batch and its checkpoint in the same database transaction."""
         with PostgreSQLConnector(settings=self.settings) as pg_conn:
+            with pg_conn.connection.cursor() as cursor:
+                cursor.execute(
+                    "SET statement_timeout = %s",
+                    (self.settings.bronze_batch_timeout_seconds * 1000,),
+                )
+            pg_conn.connection.commit()
             engine = create_engine(
                 "postgresql://",
                 creator=lambda: pg_conn.connection,

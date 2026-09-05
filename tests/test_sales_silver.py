@@ -1,7 +1,9 @@
 import pandas as pd
+import pytest
 
 from scripts.transformation.silver.sales_silver_clean import (
     clean_product,
+    clean_sales_person,
     clean_sales_order_detail,
     clean_sales_order_header,
 )
@@ -80,3 +82,71 @@ def test_clean_product_sets_discontinued_flag_and_trims_name():
     assert result.iloc[0]["product_name"] == "Road Bike"
     assert bool(result.iloc[0]["is_discontinued"]) is True
     assert "discontinued_date" not in result.columns
+
+
+def test_clean_sales_person_fails_closed_without_person_dependency():
+    salesperson_frame = pd.DataFrame(
+        {
+            "BusinessEntityID": [20],
+            "TerritoryID": [1],
+            "SalesQuota": [1000],
+            "Bonus": [10],
+            "CommissionPct": [0.02],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=r"bronze\.person"):
+        clean_sales_person(salesperson_frame)
+
+
+def test_clean_sales_person_fails_closed_when_person_schema_is_incomplete():
+    salesperson_frame = pd.DataFrame({"BusinessEntityID": [20]})
+    person_frame = pd.DataFrame({"BusinessEntityID": [20], "FirstName": ["Linda"]})
+
+    with pytest.raises(RuntimeError, match="last_name"):
+        clean_sales_person(salesperson_frame, person_frame)
+
+
+def test_clean_sales_order_header_is_deterministic_across_chunk_order():
+    rows = [
+        {
+            "SalesOrderID": 1,
+            "OrderDate": "2024-01-02",
+            "DueDate": "2024-01-05",
+            "ShipDate": "2024-01-04",
+            "CustomerID": 10,
+            "SalesPersonID": 20,
+            "TerritoryID": 1,
+            "SubTotal": "10.00",
+            "TaxAmt": "1.00",
+            "Freight": "2.00",
+            "TotalDue": "13.00",
+            "OnlineOrderFlag": True,
+            "Status": 5,
+            "_source_system": "AdventureWorks2012",
+            "_load_date": "2026-08-31",
+        },
+        {
+            "SalesOrderID": 1,
+            "OrderDate": "2024-01-03",
+            "DueDate": "2024-01-06",
+            "ShipDate": "2024-01-05",
+            "CustomerID": 10,
+            "SalesPersonID": 20,
+            "TerritoryID": 1,
+            "SubTotal": "12.00",
+            "TaxAmt": "1.40",
+            "Freight": "2.50",
+            "TotalDue": "15.90",
+            "OnlineOrderFlag": True,
+            "Status": 5,
+            "_source_system": "AdventureWorks2012",
+            "_load_date": "2026-09-01",
+        },
+    ]
+
+    first = clean_sales_order_header(pd.DataFrame(rows[::-1]))
+    second = clean_sales_order_header(pd.DataFrame(rows))
+
+    assert first.equals(second)
+    assert first.iloc[0]["total_due"] == 15.90

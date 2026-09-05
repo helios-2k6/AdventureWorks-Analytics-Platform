@@ -13,8 +13,15 @@ class PostgresPublishService:
     staging_schema = "bronze_staging"
     published_schema = "bronze"
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        staging_schema: str | None = None,
+        published_schema: str | None = None,
+    ):
         self.settings = settings or get_settings()
+        self.staging_schema = staging_schema or type(self).staging_schema
+        self.published_schema = published_schema or type(self).published_schema
         ensure_ingestion_schema(self.settings)
 
     def publish(
@@ -81,3 +88,10 @@ class PostgresPublishService:
             raise ValueError(f"Invalid publish identifier: {identifier!r}")
         if not (identifier[0].isalpha() or identifier[0] == "_"):
             raise ValueError(f"Invalid publish identifier: {identifier!r}")
+
+
+class PostgresSilverPublishService(PostgresPublishService):
+    """Atomically promote a validated Silver staging table into Silver."""
+
+    staging_schema = "silver_staging"
+    published_schema = "silver"

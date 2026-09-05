@@ -6,6 +6,7 @@ def ensure_ingestion_schema(settings: Settings | None = None) -> None:
     """Create durable ingestion metadata tables when a production service starts."""
     with PostgreSQLConnector(settings=settings or get_settings()) as connection:
         connection.execute_query("CREATE SCHEMA IF NOT EXISTS bronze_staging")
+        connection.execute_query("CREATE SCHEMA IF NOT EXISTS silver_staging")
         connection.execute_query(
             """
             CREATE TABLE IF NOT EXISTS bronze.pipeline_run_audit (
@@ -15,7 +16,9 @@ def ensure_ingestion_schema(settings: Settings | None = None) -> None:
                 status VARCHAR(50) NOT NULL,
                 started_at TIMESTAMPTZ NOT NULL,
                 finished_at TIMESTAMPTZ,
-                error_count INTEGER NOT NULL DEFAULT 0
+                error_count INTEGER NOT NULL DEFAULT 0,
+                error_type VARCHAR(255),
+                error_message TEXT
             )
             """
         )
@@ -35,7 +38,8 @@ def ensure_ingestion_schema(settings: Settings | None = None) -> None:
                 error_type VARCHAR(255),
                 error_message TEXT,
                 started_at TIMESTAMPTZ,
-                finished_at TIMESTAMPTZ
+                finished_at TIMESTAMPTZ,
+                duration_ms BIGINT
             )
             """
         )
@@ -53,8 +57,25 @@ def ensure_ingestion_schema(settings: Settings | None = None) -> None:
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 status VARCHAR(50) NOT NULL,
                 committed_at TIMESTAMPTZ
+                ,duration_ms BIGINT
             )
             """
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.pipeline_run_audit "
+            "ADD COLUMN IF NOT EXISTS error_type VARCHAR(255)"
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.pipeline_run_audit "
+            "ADD COLUMN IF NOT EXISTS error_message TEXT"
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.table_load_audit "
+            "ADD COLUMN IF NOT EXISTS duration_ms BIGINT"
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.batch_load_audit "
+            "ADD COLUMN IF NOT EXISTS duration_ms BIGINT"
         )
         connection.execute_query(
             """
@@ -68,9 +89,19 @@ def ensure_ingestion_schema(settings: Settings | None = None) -> None:
                 source_hash VARCHAR(128),
                 reason TEXT NOT NULL,
                 rejected_at TIMESTAMPTZ NOT NULL,
+                transform_version VARCHAR(128) NOT NULL DEFAULT 'unknown',
+                error_type VARCHAR(128) NOT NULL DEFAULT 'TransformationError',
                 UNIQUE (run_id, load_id, batch_id, record_key, source_hash)
             )
             """
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.rejected_records "
+            "ADD COLUMN IF NOT EXISTS transform_version VARCHAR(128) NOT NULL DEFAULT 'unknown'"
+        )
+        connection.execute_query(
+            "ALTER TABLE bronze.rejected_records "
+            "ADD COLUMN IF NOT EXISTS error_type VARCHAR(128) NOT NULL DEFAULT 'TransformationError'"
         )
         connection.execute_query(
             "ALTER TABLE bronze.batch_load_audit "

@@ -41,3 +41,28 @@ def test_audit_service_rejects_duplicate_batch_identity():
     service.record_batch(audit)
     with pytest.raises(ValueError, match="already exists"):
         service.record_batch(audit)
+
+
+def test_audit_service_reconciles_only_stale_non_terminal_runs():
+    service = AuditService()
+    now = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
+    service.record_run(
+        RunAudit(
+            "stale-run", "bronze", "full", IngestionStatus.RETRYING,
+            datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc),
+        )
+    )
+    service.record_run(
+        RunAudit(
+            "active-run", "bronze", "full", IngestionStatus.LOADING,
+            datetime(2026, 9, 5, 11, 59, tzinfo=timezone.utc),
+        )
+    )
+
+    reconciled = service.reconcile_stale_runs(3600, now=now)
+
+    assert reconciled == ["stale-run"]
+    assert service.runs[-1].status is IngestionStatus.FAILED
+    assert service.runs[-1].error_type == "StaleRunTimeout"
+    assert service.runs[-1].finished_at == now
+    assert service.runs[-2].run_id == "active-run"

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Dict
 
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+from src.features.Sales_Performance.jobs.sales_silver_job import SalesSilverJob
 from src.shared.connectors.postgres_connector import PostgreSQLConnector
 
 
@@ -25,8 +28,12 @@ def _warehouse_engine(connection):
     return create_engine("postgresql://", creator=lambda: connection, poolclass=StaticPool)
 
 
-def _read_bronze(source_table: str, engine) -> pd.DataFrame:
-    return pd.read_sql_query(f'SELECT * FROM bronze."{source_table}"', engine)
+def _read_bronze(source_table: str, engine, chunksize: int = 10000):
+    return pd.read_sql_query(
+        f'SELECT * FROM bronze."{source_table}"',
+        engine,
+        chunksize=chunksize,
+    )
 
 
 def _rename_columns(frame: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
@@ -34,11 +41,35 @@ def _rename_columns(frame: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFram
 
 
 def _deduplicate(frame: pd.DataFrame, key: str) -> pd.DataFrame:
-    return frame.drop_duplicates(subset=[key], keep="last").reset_index(drop=True)
+    if key not in frame.columns:
+        return frame.reset_index(drop=True)
+
+    working = frame.copy()
+
+    def _row_signature(row: pd.Series) -> str:
+        payload = row.drop(labels=[key], errors="ignore").to_dict()
+        normalized = json.dumps(payload, default=str, sort_keys=True)
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    if "_load_date" in working.columns:
+        working["_load_date"] = pd.to_datetime(working["_load_date"], errors="coerce")
+
+    working["_dedup_tie_breaker"] = working.apply(_row_signature, axis=1)
+
+    if "_load_date" in working.columns:
+        working = working.sort_values(["_load_date", "_dedup_tie_breaker"], ascending=[False, True], kind="mergesort")
+    else:
+        working = working.sort_values(["_dedup_tie_breaker"], ascending=[True], kind="mergesort")
+
+    result = working.drop_duplicates(subset=[key], keep="first").drop(columns=["_dedup_tie_breaker"], errors="ignore").reset_index(drop=True)
+    return result
 
 
 def _select_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    return frame.loc[:, columns]
+    selected = list(columns)
+    if "_record_hash" in frame.columns and "_record_hash" not in selected:
+        selected.append("_record_hash")
+    return frame.loc[:, selected]
 
 
 def clean_sales_order_header(frame: pd.DataFrame) -> pd.DataFrame:
@@ -71,7 +102,7 @@ def clean_sales_order_header(frame: pd.DataFrame) -> pd.DataFrame:
         "sales_order_id", "order_date", "due_date", "ship_date", "customer_id",
         "salesperson_id", "territory_id", "subtotal", "tax_amt", "freight",
         "total_due", "is_online_order", "status_code", "_source_system", "_load_date",
-    ])
+    ]).sort_values("sales_order_id", kind="mergesort").reset_index(drop=True)
 
 
 def clean_sales_order_detail(frame: pd.DataFrame) -> pd.DataFrame:
@@ -96,7 +127,7 @@ def clean_sales_order_detail(frame: pd.DataFrame) -> pd.DataFrame:
     return _select_columns(result, [
         "sales_order_id", "sales_order_detail_id", "product_id", "order_qty",
         "unit_price", "unit_price_discount", "line_total", "_source_system", "_load_date",
-    ])
+    ]).sort_values("sales_order_detail_id", kind="mergesort").reset_index(drop=True)
 
 
 def clean_customer(frame: pd.DataFrame) -> pd.DataFrame:
@@ -117,7 +148,7 @@ def clean_customer(frame: pd.DataFrame) -> pd.DataFrame:
     return _select_columns(result, [
         "customer_id", "person_id", "store_id", "territory_id", "account_number",
         "customer_name", "_source_system", "_load_date",
-    ])
+    ]).sort_values("customer_id", kind="mergesort").reset_index(drop=True)
 
 
 def clean_sales_territory(frame: pd.DataFrame) -> pd.DataFrame:
@@ -137,10 +168,15 @@ def clean_sales_territory(frame: pd.DataFrame) -> pd.DataFrame:
     return _select_columns(result, [
         "territory_id", "territory_name", "country_region_code", "territory_group",
         "_source_system", "_load_date",
-    ])
+    ]).sort_values("territory_id", kind="mergesort").reset_index(drop=True)
 
 
 def clean_sales_person(frame: pd.DataFrame, person_frame: pd.DataFrame = None) -> pd.DataFrame:
+    if person_frame is None:
+        raise RuntimeError(
+            "Missing required Bronze dependency 'bronze.person' for Silver table 'sales_person'."
+        )
+
     result = _rename_columns(
         frame,
         {
@@ -155,31 +191,40 @@ def clean_sales_person(frame: pd.DataFrame, person_frame: pd.DataFrame = None) -
     )
     result["salesperson_id"] = result["business_entity_id"]
     
-    # If person_frame provided, join to get real names
-    if person_frame is not None:
-        person_clean = _rename_columns(
-            person_frame,
-            {
-                "BusinessEntityID": "business_entity_id",
-                "FirstName": "first_name",
-                "LastName": "last_name",
-            },
+    person_clean = _rename_columns(
+        person_frame,
+        {
+            "BusinessEntityID": "business_entity_id",
+            "FirstName": "first_name",
+            "LastName": "last_name",
+        },
+    )
+    required_person_columns = {"business_entity_id", "first_name", "last_name"}
+    missing_person_columns = required_person_columns.difference(person_clean.columns)
+    if missing_person_columns:
+        missing = ", ".join(sorted(missing_person_columns))
+        raise RuntimeError(
+            "Missing required columns in Bronze dependency 'bronze.person': "
+            f"{missing}."
         )
-        person_clean = person_clean[["business_entity_id", "first_name", "last_name"]]
-        result = result.merge(person_clean, on="business_entity_id", how="left")
-        result["salesperson_name"] = (
-            result["first_name"].fillna("") + " " + result["last_name"].fillna("")
-        ).str.strip()
-        result = result.drop(columns=["first_name", "last_name"], errors="ignore")
-    else:
-        # Fallback: use ID if person data not available
-        result["salesperson_name"] = result["business_entity_id"].astype("string")
-    
+
+    for column in ["sales_quota", "bonus", "commission_pct"]:
+        if column in result.columns:
+            result[column] = pd.to_numeric(result[column], errors="coerce")
+
+    person_clean = person_clean[["business_entity_id", "first_name", "last_name"]]
+    result = result.merge(person_clean, on="business_entity_id", how="left")
+    result["salesperson_name"] = (
+        result["first_name"].fillna("") + " " + result["last_name"].fillna("")
+    ).str.strip()
+    result = result.drop(columns=["first_name", "last_name"], errors="ignore")
+
+    result["salesperson_name"] = result["salesperson_name"].astype("string").str.strip()
     result = _deduplicate(result, "salesperson_id")
     return _select_columns(result, [
         "salesperson_id", "business_entity_id", "territory_id", "sales_quota", "bonus",
         "commission_pct", "salesperson_name", "_source_system", "_load_date",
-    ])
+    ]).sort_values("salesperson_id", kind="mergesort").reset_index(drop=True)
 
 
 def clean_product(frame: pd.DataFrame) -> pd.DataFrame:
@@ -207,7 +252,7 @@ def clean_product(frame: pd.DataFrame) -> pd.DataFrame:
     return _select_columns(result, [
         "product_id", "product_name", "product_number", "product_line", "class", "style",
         "list_price", "standard_cost", "is_discontinued", "_source_system", "_load_date",
-    ])
+    ]).sort_values("product_id", kind="mergesort").reset_index(drop=True)
 
 
 CLEANERS = {
@@ -221,33 +266,8 @@ CLEANERS = {
 
 
 def run() -> Dict[str, Dict[str, int]]:
-    """Transform all Bronze sales tables and replace their Silver outputs."""
-    results = {}
-    with PostgreSQLConnector() as pg_conn:
-        engine = _warehouse_engine(pg_conn.connection)
-        
-        # Read Person data once if available
-        person_frame = None
-        try:
-            person_frame = _read_bronze("person", engine)
-        except Exception:
-            print("⚠️ Warning: Person table not found in Bronze. Using fallback names.")
-        
-        for source_table, target_table in SILVER_TABLES.items():
-            bronze_frame = _read_bronze(source_table, engine)
-            
-            # Pass person_frame to clean_sales_person if this is sales_person table
-            if source_table == "sales_person" and person_frame is not None:
-                silver_frame = CLEANERS[source_table](bronze_frame, person_frame)
-            else:
-                silver_frame = CLEANERS[source_table](bronze_frame)
-            
-            silver_frame.to_sql(target_table, engine, schema="silver", if_exists="replace", index=False, method="multi", chunksize=1000)
-            results[target_table] = {
-                "source_count": len(bronze_frame),
-                "target_count": len(silver_frame),
-            }
-    return results
+    """Legacy Silver entrypoint that delegates to the injectable job/service."""
+    return SalesSilverJob().run()
 
 
 if __name__ == "__main__":

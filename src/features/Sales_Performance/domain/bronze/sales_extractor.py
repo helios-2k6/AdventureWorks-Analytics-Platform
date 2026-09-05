@@ -46,6 +46,7 @@ class SalesExtractor:
         spec: TableSpec,
         load_date: Optional[datetime] = None,
         legacy_query: bool = False,
+        start_after=None,
     ):
         if load_date is None:
             load_date = datetime.now()
@@ -55,12 +56,21 @@ class SalesExtractor:
 
         query = f"SELECT * FROM {spec.source_name}"
         if not legacy_query:
+            if start_after is not None:
+                query += f" WHERE {spec.ordering_key} > ?"
             query += f" ORDER BY {spec.ordering_key}"
 
         with SQLServerConnector(settings=self.settings) as sql_conn:
             cursor = sql_conn.connection.cursor()
             try:
-                cursor.execute(query)
+                if hasattr(cursor, "timeout"):
+                    cursor.timeout = self.settings.bronze_query_timeout_seconds
+                elif hasattr(sql_conn.connection, "timeout"):
+                    sql_conn.connection.timeout = self.settings.bronze_query_timeout_seconds
+                if start_after is None:
+                    cursor.execute(query)
+                else:
+                    cursor.execute(query, start_after)
                 columns = [description[0] for description in cursor.description]
                 batch_number = 1
                 while True:

@@ -4,6 +4,7 @@ import pytest
 from src.shared.ingestion.domain_bronze_job import DomainBronzeJob
 from src.shared.ingestion.ingestion_models import (
     ExtractionBatch,
+    IngestionStatus,
     TableSpec,
     deterministic_batch_id,
 )
@@ -106,8 +107,14 @@ def test_domain_job_retries_transient_write_with_same_batch_identity():
 
     assert result["status"] == "SUCCESS"
     assert result["attempt_count"] == 2
+    assert result["duration_ms"] is not None
     assert audit.attempt_count == 2
     assert len(manager.get(result["staging_name"]).batch_ids) == 1
+    statuses = [audit.status for audit in job.audit_service.runs]
+    assert statuses[0:2] == [IngestionStatus.STARTED, IngestionStatus.READING]
+    assert IngestionStatus.RETRYING in statuses
+    assert IngestionStatus.VALIDATING in statuses
+    assert IngestionStatus.PUBLISHED in statuses
 
 
 def test_domain_job_retry_exhaustion_fails_without_publishing():
@@ -142,3 +149,5 @@ def test_domain_job_retry_exhaustion_fails_without_publishing():
     assert result["attempt_count"] == 2
     assert result["published"] is False
     assert manager.get(result["staging_name"]).batch_ids == ()
+    assert IngestionStatus.RETRYING in [audit.status for audit in job.audit_service.runs]
+    assert IngestionStatus.PUBLISHED not in [audit.status for audit in job.audit_service.runs]

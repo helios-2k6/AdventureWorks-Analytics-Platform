@@ -65,12 +65,17 @@ class ExtractionBatch:
 
 
 class IngestionStatus(str, Enum):
+    STARTED = "STARTED"
+    READING = "READING"
+    VALIDATING = "VALIDATING"
+    LOADING = "LOADING"
     SUCCESS = "SUCCESS"
     SUCCESS_WITH_REJECTIONS = "SUCCESS_WITH_REJECTIONS"
     PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
     FAILED = "FAILED"
     RETRYING = "RETRYING"
     QUARANTINED = "QUARANTINED"
+    PUBLISHED = "PUBLISHED"
 
 
 def utc_now() -> datetime:
@@ -123,6 +128,7 @@ class IngestionResult:
     finished_at: Optional[datetime] = None
     error_type: Optional[str] = None
     error_message: Optional[str] = None
+    duration_ms: Optional[int] = None
 
     def __post_init__(self):
         if self.started_at is None:
@@ -149,6 +155,7 @@ class IngestionResult:
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "error_type": self.error_type,
             "error_message": self.error_message,
+            "duration_ms": self.duration_ms,
         }
         return result
 
@@ -162,6 +169,8 @@ class RunAudit:
     started_at: datetime
     finished_at: Optional[datetime] = None
     error_count: int = 0
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +189,7 @@ class TableLoadAudit:
     error_message: Optional[str] = None
     started_at: datetime = None
     finished_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -193,9 +203,10 @@ class BatchLoadAudit:
     rows_written: int = 0
     rows_rejected: int = 0
     attempt_count: int = 0
-    status: IngestionStatus = IngestionStatus.RETRYING
+    status: IngestionStatus = IngestionStatus.STARTED
     committed_at: Optional[datetime] = None
     content_hash: Optional[str] = None
+    duration_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -208,3 +219,5 @@ class RejectedRecord:
     source_hash: Optional[str]
     reason: str
     rejected_at: datetime
+    transform_version: str = "unknown"
+    error_type: str = "TransformationError"

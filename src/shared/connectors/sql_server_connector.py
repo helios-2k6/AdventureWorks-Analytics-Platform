@@ -18,6 +18,7 @@ class SQLServerConnector(BaseConnector):
     ):
         super().__init__()
         resolved_settings = settings or get_settings()
+        self.settings = resolved_settings
         self.host = resolved_settings.sql_server_host
         self.port = resolved_settings.sql_server_port
         self.database = resolved_settings.sql_server_database
@@ -52,7 +53,10 @@ class SQLServerConnector(BaseConnector):
                     f"PWD={self.password};"
                 )
 
-            self.connection = pyodbc.connect(connection_string)
+            self.connection = pyodbc.connect(
+                connection_string,
+                timeout=self.settings.bronze_query_timeout_seconds,
+            )
             logger.info("Connected to SQL Server: %s/%s", self.host, self.database)
             return True
         except Exception as exc:  # pragma: no cover - logging branch

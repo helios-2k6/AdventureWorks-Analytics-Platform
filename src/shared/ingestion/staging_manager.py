@@ -62,6 +62,9 @@ class StagingManager:
         name = (
             f"{target_table}__{safe_run_id}__{safe_load_id}"
         )
+        existing = self._staging.get(name)
+        if existing is not None:
+            return existing
         staging = StagingTable(
             name=name,
             target_table=target_table,

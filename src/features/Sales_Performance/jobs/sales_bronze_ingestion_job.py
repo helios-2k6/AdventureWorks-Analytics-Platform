@@ -17,5 +17,17 @@ class SalesBronzeIngestionJob:
     def run(self, mode: str = "full", load_date: Optional[datetime] = None) -> Dict[str, Dict]:
         return self._job.run(mode=mode, load_date=load_date)
 
+    def resume(
+        self,
+        resume_load_ids: dict[str, str],
+        mode: str = "full",
+        load_date: Optional[datetime] = None,
+    ) -> Dict[str, Dict]:
+        return self._job.run(
+            mode=mode,
+            load_date=load_date,
+            resume_load_ids=resume_load_ids,
+        )
+
 
 __all__ = ["SALES_TABLE_SPECS", "SalesBronzeIngestionJob"]
