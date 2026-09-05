@@ -1,5 +1,6 @@
 from src.app.bronze_snapshot_gate import BronzeSnapshotGate, REQUIRED_BRONZE_TARGETS
 from src.app.bronze_to_silver_pipeline import BronzeToSilverPipeline
+from src.features.Person.jobs.person_bronze_job import PersonBronzeJob
 
 
 class _FakeBronze:
@@ -31,7 +32,9 @@ class _FakeSilver:
         return self.result(run_id) if callable(self.result) else self.result
 
 
-def _bronze_result(status="SUCCESS", published=True):
+def _bronze_result(
+    targets=REQUIRED_BRONZE_TARGETS, status="SUCCESS", published=True
+):
     return {
         target: {
             "run_id": f"run-{target}",
@@ -41,7 +44,7 @@ def _bronze_result(status="SUCCESS", published=True):
             "rows_read": 1,
             "rows_written": 1,
         }
-        for target in REQUIRED_BRONZE_TARGETS
+        for target in targets
     }
 
 
@@ -85,6 +88,10 @@ def test_bronze_failure_blocks_silver():
     assert result["status"] == "FAILED"
     assert silver.called is False
     assert bronze.called is True
+    assert any(
+        "bronze.customer" in failure
+        for failure in result["bronze_gate"]["failures"]
+    )
 
 
 def test_successful_snapshot_calls_silver_with_snapshot_identity():
@@ -154,6 +161,33 @@ def test_silver_identity_mismatch_blocks_pipeline():
     assert result["silver_identity"]["status"] == "FAILED"
 
 
+def test_bronze_snapshot_mismatch_blocks_silver():
+    bronze_result = _bronze_result()
+    bronze_result["bronze.customer"]["snapshot_id"] = "snapshot-old"
+    bronze = _FakeBronze(bronze_result)
+    silver = _FakeSilver(lambda snapshot_id: _silver_result(snapshot_id))
+    pipeline = BronzeToSilverPipeline(
+        bronze_jobs=(bronze,),
+        silver_job=silver,
+        snapshot_gate=BronzeSnapshotGate(),
+    )
+
+    result = pipeline.run()
+
+    assert result["status"] == "FAILED"
+    assert silver.called is False
+    assert any(
+        "Bronze snapshot identity mismatch" in failure
+        for failure in result["bronze_gate"]["failures"]
+    )
+
+
+def test_default_pipeline_includes_person_bronze_dependency():
+    pipeline = BronzeToSilverPipeline()
+
+    assert any(isinstance(job, PersonBronzeJob) for job in pipeline.bronze_jobs)
+
+
 def test_sales_and_person_bronze_complete_before_silver():
     events = []
     bronze_result = _bronze_result()
@@ -171,3 +205,28 @@ def test_sales_and_person_bronze_complete_before_silver():
 
     assert result["status"] == "SUCCESS"
     assert events == ["sales", "person", "production", "silver"]
+
+
+def test_full_bronze_to_silver_uses_one_snapshot_across_all_domains():
+    sales_targets = REQUIRED_BRONZE_TARGETS[:5]
+    production_targets = ("bronze.product",)
+    person_targets = ("bronze.person",)
+    sales = _FakeBronze(_bronze_result(sales_targets), "sales")
+    production = _FakeBronze(_bronze_result(production_targets), "production")
+    person = _FakeBronze(_bronze_result(person_targets), "person")
+    silver = _FakeSilver(lambda snapshot_id: _silver_result(snapshot_id))
+    pipeline = BronzeToSilverPipeline(
+        bronze_jobs=(sales, person, production),
+        silver_job=silver,
+        snapshot_gate=BronzeSnapshotGate(),
+    )
+
+    result = pipeline.run(mode="full")
+
+    assert result["status"] == "SUCCESS"
+    assert result["bronze_gate"]["status"] == "SUCCESS"
+    assert set(result["bronze"]) == set(REQUIRED_BRONZE_TARGETS)
+    assert {
+        item["snapshot_id"] for item in result["bronze"].values()
+    } == {result["snapshot_id"]}
+    assert silver.arguments == (result["snapshot_id"], result["snapshot_id"])

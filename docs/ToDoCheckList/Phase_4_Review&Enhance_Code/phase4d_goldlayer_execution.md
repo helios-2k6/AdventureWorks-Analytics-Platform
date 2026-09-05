@@ -8,13 +8,54 @@ Phase 4D covers:
 
 1. Encapsulate Gold loading as an injectable job/service.
 2. Keep full-read processing for currently small dimensions.
-3. Build `fact_sales` with SQL-side staging or a stable-key batch fallback.
+3. Build `fact_sales` with stable-key batches.
 4. Run integrity, grain, key, measure, and KPI validation before publication.
 5. Create and verify constraints on staging before publication.
 6. Publish Gold atomically with safe retry and reconciliation behavior.
 7. Run focused Gold regression tests and the appropriate repository regression suite.
 
 Phase 4D does not redesign the Silver transformation, add unrelated Gold facts, or change approved business measures without a recorded decision.
+
+### 1.1 Approved decisions
+
+The following decisions are the implementation contract for Phase 4D. Where earlier sections differ, these decisions take precedence.
+
+| Topic | Approved decision |
+|---|---|
+| Canonical pipeline | Extend `PipelineRunner` to run Gold after Bronze and Silver; do not create a parallel production orchestration path. Gold failure returns pipeline `FAILED` with `failed_stage="gold"`; `App` maps it to `degraded`. |
+| Stage gates | Use a generic `StageSnapshotGate` with thin `BronzeSnapshotGate`, `SilverSnapshotGate`, and `GoldPublishGate` wrappers. Gates validate required tables, status, published state, identity, and target contract; they do not validate KPI or business rules. |
+| Silver snapshot | Phase 4D uses the existing metadata-based snapshot gate and does not redesign Silver as an atomic multi-table publication. Gold runs only when all six Silver targets are published and share the same `source_snapshot_id`. |
+| Identity | Gold results distinguish `pipeline_snapshot_id`, `source_snapshot_id`, `gold_run_id`, and `gold_load_id`. A retry of the same load keeps `gold_load_id`; a batch retry keeps `batch_id`; a pipeline rerun creates a new `gold_run_id`; the same Silver snapshot may produce a new Gold version. |
+| Gold publication | Use a versioned schema and current pointer; do not publish Gold tables independently. Build the candidate in its own schema version and update the current pointer only after every validation and KPI check passes. |
+| Gold schema | Phase 4D builds six tables: `dim_date`, `dim_customer`, `dim_product`, `dim_territory`, `dim_salesperson`, and `fact_sales`. Keep `created_at`, and add `gold_version` and `source_snapshot_id`. Map `class -> product_class` and `style -> product_style`. |
+| Fact strategy | Use the stable-key batch strategy on `sales_order_detail_id`; do not use offsets/page numbers and do not implement a SQL-side fact path in Phase 4D. |
+| KPI gate | Run KPI validation against the candidate version before updating the current pointer, using the Silver baseline from the same `source_snapshot_id` and a default 2% tolerance. KPI mismatch is deterministic and is not retried. |
+| Builder compatibility | Preserve the current pure-builder APIs and return types. The new Gold job owns pre-validation, staging, retry, audit, and publication; legacy `run()` only delegates. |
+| Result model | Reuse `ExecutionIdentity`, `IngestionStatus`, and base result fields; add `GoldTableResult` and `GoldRunResult` without duplicating identity or status logic. |
+| Concurrency | Allow only one active Gold run in Phase 4D. |
+| Retention | Keep at least one previous Gold version; retain failed candidates for 24-72 hours; retain backups until audit completion; cleanup must be idempotent and rerunnable. |
+
+### 1.2 Current pointer and KPI rules
+
+Each Gold run creates a `gold_version` and a separate candidate schema, for example `gold_v002`. Consumers continue to use stable views or pointer objects under the `gold` namespace; consumers must not query versioned schemas directly.
+
+Publication order:
+
+```text
+build candidate schema
+  -> validate schema, grain, references, measures, and constraints
+      -> validate KPI against candidate and Silver snapshot
+          -> atomically update current pointer
+              -> write publication audit
+```
+
+If any step before the pointer update fails, the pointer remains unchanged and the current Gold version continues serving data. KPI policy:
+
+- The candidate and Silver baseline must use the same `source_snapshot_id`.
+- The default tolerance is 2% relative variance.
+- When the baseline is zero, only a zero candidate passes; a non-zero candidate fails.
+- KPI failure is not retried, published, or allowed to change the current pointer.
+- The report records `gold_run_id`, `gold_version`, `source_snapshot_id`, candidate identity, tolerance, and each metric comparison.
 
 ## 2. Baseline and current implementation
 
@@ -24,13 +65,13 @@ Phase 4D does not redesign the Silver transformation, add unrelated Gold facts, 
 |---|---|---|---|
 | Gold builders | `scripts/warehouse/postgres/gold/sales_gold_load.py` | Builds five dimensions and `fact_sales` with pandas | Preserve pure builders while moving orchestration and safety into a job/service |
 | Gold orchestration | `scripts/warehouse/postgres/gold/sales_gold_load.py:run()` | Drops published Gold tables, reads all Silver tables, writes with `to_sql(..., if_exists="replace")`, then adds constraints | Destructive build can remove the last valid Gold version and expose partial output |
-| Silver read | `_read()` in `sales_gold_load.py` | Uses full-table `pd.read_sql_query()` for all tables | Full-read is acceptable for small dimensions but not for a large fact input |
-| Fact construction | `build_fact_sales()` | pandas many-to-one join of all detail and header rows | Need SQL-side or stable-key batch strategy with explicit grain and no silent row loss |
+| Silver read | `_read()` in `sales_gold_load.py` | Uses full-table `pd.read_sql_query()` for all tables | Full-read remains only for small dimensions; fact input must use stable-key batches |
+| Fact construction | `build_fact_sales()` | pandas many-to-one join of all detail and header rows | The Gold job must use stable-key batches with explicit grain and no silent row loss |
 | Dimension construction | `build_dim_*()` | pandas selection and `drop_duplicates()` | Full-read remains allowed, but key uniqueness and deterministic selection must be validated |
 | Constraints | `_add_constraints()` | Adds PK/FK to published tables after direct writes | Constraints must be created/verified on staging before publish |
 | Destructive reset | `_reset_gold_tables()` | Drops six Gold tables with `CASCADE` before build | Must be removed from the canonical path; previous Gold must survive failures |
 | KPI validation | `scripts/warehouse/postgres/gold/validate_sales_kpis.py` | Compares Gold metrics with Silver baseline after publication | Must become a pre-publish gate against the candidate Gold version |
-| Gold schema | `scripts/warehouse/postgres/schema/03_create_gold_schema.sql` | Defines dimensions and fact tables, including PKs on initial DDL | Runtime `replace` can discard these constraints and create schema drift |
+| Gold schema | `scripts/warehouse/postgres/schema/03_create_gold_schema.sql` | Current DDL is incomplete for dimensions, fact PK/FK, and version metadata | Add versioned schemas, a current pointer, explicit types/constraints, and metadata contract |
 | Existing tests | `tests/test_sales_gold.py` | Covers dimension builders, fact calculations, grain, null handling, and output columns | Add service, staging, integrity, retry, publish-preservation, and rerun coverage |
 
 ### 2.2 Important schema contract observations
@@ -42,6 +83,10 @@ The implementation must reconcile the current code/schema contract before public
 - `salesperson_id` may be NULL for online orders; the FK policy must allow this explicitly while rejecting non-null orphan keys.
 - The pandas product builder currently emits `class` and `style`, while the SQL schema names the corresponding columns `product_class` and `product_style`. This mismatch must be resolved by an explicit mapping or schema decision and covered by a contract test; it must not be left to `to_sql` inference.
 - `created_at` and other database-managed metadata must not be lost when a staging table is published or when constraints are applied.
+- The Gold schema must contain exactly the six Phase 4D tables: five dimensions and `fact_sales`; the job must not build the other facts.
+- `fact_sales.sales_order_detail_id` is the primary key, and all foreign keys must be declared and verified on the candidate before publication.
+- Every candidate table contains `gold_version` and `source_snapshot_id`; `created_at` remains row metadata.
+- Stable views or pointer objects under the `gold` namespace are the stable read surface; consumers must not query versioned schemas directly.
 
 ### 2.3 Falsifiable implementation hypothesis
 
@@ -65,17 +110,17 @@ The compatibility wrapper must delegate only. Staging, retries, constraint manag
 
 ```mermaid
 flowchart LR
-    A[Validated Silver snapshot/load] --> B[GoldJob]
-    B --> C[Input schema and snapshot contract]
-    C --> D[Small dimensions full-read]
-    C --> E[Fact SQL JOIN or stable key batches]
-    D --> F[Gold run staging]
-    E --> F
-    F --> G[Pre-publish integrity validation]
-    G --> H[Constraints on staging]
-    H --> I[KPI validation]
-    I -->|pass| J[Atomic publish/swap]
-    I -->|fail| K[Keep previous Gold]
+    A[Validated Silver snapshot/load] --> B[PipelineRunner]
+    B --> C[GoldSnapshotGate]
+    C --> D[GoldJob]
+    D --> E[Small dimensions full-read]
+    D --> F[Stable-key fact batches]
+    E --> G[Candidate version schema]
+    F --> G
+    G --> H[Pre-publish integrity validation]
+    H --> I[Constraints and KPI validation]
+    I -->|pass| J[Atomic current pointer update]
+    I -->|fail| K[Keep previous Gold version]
 ```
 
 ### 3.1 Gold tables and ownership
@@ -87,7 +132,7 @@ flowchart LR
 | `gold.dim_product` | One row per `product_id`; PK `product_id` | Full-read dimension is allowed | Output/schema naming aligned with DDL |
 | `gold.dim_territory` | One row per `territory_id`; PK `territory_id` | Full-read dimension is allowed | Unique key and referenced territory keys validated |
 | `gold.dim_salesperson` | One row per `salesperson_id`; PK `salesperson_id` | Full-read dimension is allowed | Nullable fact FK policy is explicit |
-| `gold.fact_sales` | One row per `sales_order_detail_id`; PK `sales_order_detail_id` | Prefer PostgreSQL SQL JOIN/staging; stable key batches are fallback | Duplicate, orphan, null, measure, and KPI violations fail closed |
+| `gold.fact_sales` | One row per `sales_order_detail_id`; PK `sales_order_detail_id` | Stable-key batches ordered by `sales_order_detail_id`, using `(lower_bound, upper_bound]` | Duplicate, orphan, null, measure, and KPI violations fail closed |
 
 ### 3.2 Component boundaries
 
@@ -96,23 +141,31 @@ flowchart LR
 | `GoldJob` or `SalesGoldJob` | Snapshot selection, table order, dimension/fact build coordination, result aggregation, and Gold policy | Environment parsing or duplicated retry/publish mechanics |
 | Gold table/build specifications | Source tables, target tables, keys, required columns, data types, and FK map | Database transaction state and retry loops |
 | Pure `build_dim_*`/`build_fact_sales` functions | Deterministic pandas transformation and measure calculation | Database writes, destructive DDL, retries, or publication |
-| Fact staging builder | SQL-side join or stable-key batch extraction and writes | Changing published Gold tables |
+| Fact staging builder | Stable-key batch extraction by `sales_order_detail_id`, bounds, and content hash | Offset/page-number checkpoints or changing published Gold tables |
 | Gold validator | Schema, grain, key, null, reference, measure, and KPI checks | Silently dropping invalid rows or quarantining integrity failures |
 | Constraint manager | PK/FK/type constraint creation and verification on staging | Applying constraints to an unvalidated published table |
-| Shared staging/publish service | Run-specific identity, lifecycle, atomic swap, cleanup, and reconciliation | Gold-specific business rules |
-| Pipeline runner | Call Gold only after valid Silver; block publication on Gold failure | Gold transformation internals |
+| Shared staging/publish service | Run identity, candidate schema lifecycle, current pointer, cleanup, and reconciliation | Gold-specific business rules |
+| Pipeline runner | Call Gold only after the Silver gate; block publication on Gold failure and return `failed_stage="gold"` | Gold transformation internals |
 
 ### 3.3 Standard result contract
 
 Every Gold table and stage result must use the shared result vocabulary and include at least:
 
 ```text
-run_id, load_id/table_load_id, batch_id when applicable,
-stage, source_table, target_table, status,
+pipeline_snapshot_id, source_snapshot_id, gold_run_id, gold_load_id,
+batch_id when applicable, stage, source_table, target_table, status,
 rows_read, rows_written, rows_rejected, attempt_count,
 started_at, finished_at, error_type, error_message,
-source_snapshot, staging_identity, published
+gold_version, candidate_schema, staging_identity, published,
+validation_passed, constraints_verified, kpi_passed, previous_version
 ```
+
+Model contract:
+
+- Reuse `ExecutionIdentity`, `IngestionStatus`, and shared timing/count fields.
+- `GoldTableResult` describes one dimension/fact load; `GoldRunResult` aggregates the six table results and publication state.
+- A retry of the same load keeps `gold_load_id`; a batch retry keeps `batch_id` and bounds; a pipeline rerun creates a new `gold_run_id`.
+- `GoldRunResult` is `SUCCESS` only after the current pointer has been updated successfully.
 
 Required terminal statuses:
 
@@ -132,12 +185,12 @@ Gold does not use quarantine as the default response to integrity or business-ru
 |---|---|---|---|
 | Gold loader | Extract `run()` orchestration into an injectable job/service | Existing scripts/tests may rely on a constructor-free entrypoint | Keep builder signatures and delegating `run()`; add compatibility test |
 | Dimension reads | Keep full-read for small dimensions | Dimensions may grow beyond current assumptions | Record volume assumption and add a future threshold/strategy boundary |
-| Fact read/build | Add SQL-side staging or stable `sales_order_detail_id` batches | Chunked pandas joins can lose header context or duplicate rows | Prefer database join; fallback must use stable key ranges and many-to-one validation |
+| Fact read/build | Use stable-key batches by `sales_order_detail_id` | Chunked pandas joins can lose header context or duplicate rows | Use `(lower_bound, upper_bound]`, preserve batch identity/content hash, and validate many-to-one joins |
 | Fact grain | Enforce one row per `sales_order_detail_id` | Duplicate detail keys may be silently removed by current behavior | Duplicate key is a validation failure, never an implicit dedup rule |
-| Gold publication | Replace drop-and-recreate flow with staging and atomic swap | Swap errors can leave backup/staging objects | Reuse shared publish/reconciliation lifecycle and test rollback/preservation |
+| Gold publication | Replace drop-and-recreate flow with a candidate schema and current pointer | Pointer or swap failures can leave orphaned candidates or versions | Publish the complete candidate transactionally, keep the previous version, and clean up idempotently |
 | Constraints | Apply PK/FK and verify types on staging first | `to_sql(replace)` can erase DDL constraints or infer wrong types | Explicit DDL/type contract plus staging constraint integration tests |
 | KPI validation | Adapt `validate_sales_kpis.py` to candidate staging/version | Validating after publication cannot prevent bad Gold exposure | Run KPI comparison before publish; preserve report rendering |
-| Silver snapshot | Require one identifiable Silver snapshot/load | Mixing versions can produce inconsistent dimensions/facts | Snapshot identity is a required job input and audit field |
+| Silver snapshot | Use `SilverSnapshotGate` over existing published metadata | Result identity alone does not prove physical data consistency | Require all six targets, `published=true`, and one `source_snapshot_id` before Gold |
 | Shared infrastructure | Reuse settings, identity, retry, audit, checkpoint, staging, and publish services | Gold-specific copies can diverge from Bronze/Silver behavior | Architecture review and shared contract tests |
 
 ### 4.2 Data and operational impact
@@ -151,17 +204,21 @@ Gold does not use quarantine as the default response to integrity or business-ru
 - Retry applies only to transient database failures around an atomic unit. A failed deterministic build is not retried as a blind append.
 - An unknown commit outcome must be reconciled by staging/audit/unique-key evidence before another fact batch attempt.
 - The final result and audit must distinguish dimension rows, fact rows, rejected count (normally zero), duplicate/orphan counts, KPI status, and publication state.
+- Only one Gold run may be active; a concurrent run must wait or be rejected according to the lock policy.
+- Failed candidate schemas are retained for 24-72 hours; at least one previous Gold version is retained; cleanup is idempotent.
 
 ### 4.3 Out of scope and decisions required
 
 | Item | Treatment |
 |---|---|
-| Additional facts | `fact_customer_orders`, `fact_inventory`, and `fact_purchasing` are out of scope unless explicitly added to the Phase 4D task list. |
+| Additional facts | `fact_customer_orders`, `fact_inventory`, and `fact_purchasing` are out of scope; they may remain in the schema, but the Gold job must not build them. |
 | Slowly changing dimensions | Not introduced in Phase 4D; current dimensions remain deterministic snapshots. |
 | Gold row quarantine | Disabled by default; source conversion errors belong to Silver. |
 | Dimension scaling | Full-read is accepted for current small dimensions; add a separate decision if volume thresholds are exceeded. |
-| Product column naming | Must be resolved before production publish because builder and DDL currently differ. |
-| KPI tolerance | Preserve the current independent Silver baseline and documented 2% tolerance unless a business approval changes it. |
+| Product column naming | Keep DDL names `product_class`/`product_style`, map from builder `class`/`style`, and add a contract test. |
+| KPI tolerance | Use the Silver baseline with the same `source_snapshot_id`, relative 2% variance, and require exact zero when the baseline is zero. |
+| Gold pointer | Consumers read stable views/pointer objects under the `gold` namespace; they do not read versioned schemas directly. |
+| Concurrency/retention | Allow one active Gold run; keep the previous version, retain failed candidates 24-72 hours, and make cleanup idempotent. |
 
 ## 5. Dependencies and execution order
 
@@ -179,7 +236,7 @@ W1-W3 settings/shared contracts
                                         -> 7.8 Gold regression
 ```
 
-Do not remove the destructive Gold flow until staging publication has a tested preservation boundary. Do not add retry before fact batch identity, transaction scope, and unknown-commit reconciliation are testable. Do not create FK constraints on candidate data before orphan checks are complete.
+Do not keep the destructive Gold flow in the canonical path. Do not add retry before fact batch identity, transaction scope, and unknown-commit reconciliation are testable. Do not create FK constraints on candidate data before orphan checks are complete.
 
 ## 6. Task breakdown
 
@@ -189,7 +246,7 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 |---|---|---|---|---|---|
 | 7.1.1 | Define Gold table specifications | Immutable specs for five dimensions and `fact_sales` | Each table has source, target, key, required columns, expected types, and FK metadata | W3/W6 | Not started |
 | 7.1.2 | Create injectable Gold job | `SalesGoldJob` or equivalent with settings, reader, builders, validator, constraint manager, audit, and publisher | Job runs with fakes and returns standard results without a live database | 7.1.1 | Not started |
-| 7.1.3 | Require Silver snapshot identity | Snapshot/load parameter and audit field | All Gold tables in one run use the same approved Silver snapshot/load | 7.1.2 | Not started |
+| 7.1.3 | Require Silver snapshot gate | `SilverSnapshotGate` and source snapshot contract | All six Silver targets exist, are `published=true`, and share one `source_snapshot_id` before Gold runs | 7.1.2 | Not started |
 | 7.1.4 | Preserve legacy builders and `run()` | Delegating compatibility surface | Existing builder tests and legacy callers remain functional; wrapper contains no new mechanics | 7.1.2 | Not started |
 
 ### 6.2 Dimension full-read strategy
@@ -202,15 +259,15 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 | 7.2.4 | Resolve product column contract | Builder/schema mapping and test | Product output columns match the Gold DDL and downstream consumers exactly | 7.2.2 | Not started |
 | 7.2.5 | Build date dimension safely | Date-range builder contract | Empty or invalid date input returns a clear `FAILED` result; valid input produces a complete continuous date range | 7.2.1 | Not started |
 
-### 6.3 Fact SQL staging or stable batch fallback
+### 6.3 Stable-key fact batches
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
 | 7.3.1 | Define fact grain contract | `sales_order_detail_id` uniqueness rule | Any duplicate fact key is a validation failure and is never silently removed | 7.1.1 | Not started |
-| 7.3.2 | Implement SQL-side fact staging | PostgreSQL JOIN/INSERT staging path | Fact join executes in the database where practical and writes only to run-specific staging | 7.3.1 | Not started |
-| 7.3.3 | Implement stable-key fallback | Batch reader ordered by `sales_order_detail_id` | Fallback does not use offsets; retries reuse the same key bounds and batch identity | 7.3.1 | Not started |
-| 7.3.4 | Validate many-to-one header join | Join contract | Each detail maps to at most one header; missing required header is reported as an integrity failure | 7.3.2/7.3.3 | Not started |
-| 7.3.5 | Calculate and validate measures | Fact measures and type contract | `discount_amount`, `net_sales`, quantities, prices, and date keys match the approved formulas and types | 7.3.2/7.3.3 | Not started |
+| 7.3.2 | Read fact by stable key | Batch reader ordered by `sales_order_detail_id` | Query uses `(lower_bound, upper_bound]`, no offset/page-number, and only reads the gated source snapshot | 7.3.1 | Not started |
+| 7.3.3 | Preserve batch identity on retry | Batch audit/checkpoint integration | Retry keeps `gold_load_id`, `batch_id`, bounds, and content hash; reconcile unknown commits before rewriting | 7.3.2 | Not started |
+| 7.3.4 | Validate many-to-one header join | Join contract | Header key is unique; missing required headers are integrity failures and never silently drop details | 7.3.2 | Not started |
+| 7.3.5 | Calculate and validate measures | Fact measures and type contract | `discount_amount`, `net_sales`, quantities, prices, and date keys match approved formulas and types | 7.3.2 | Not started |
 | 7.3.6 | Commit atomic fact batches | Batch audit/checkpoint integration | Data commit precedes checkpoint; transient retry does not create duplicate fact rows | W5/7.3.3 | Not started |
 
 ### 6.4 Pre-publish integrity validation
@@ -228,7 +285,7 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 7.5.1 | Create staging DDL | Run-specific Gold staging tables | Staging tables have explicit column types and required metadata; no `replace` inference is relied upon | 7.1/7.3 | Not started |
+| 7.5.1 | Create candidate schema DDL | Versioned Gold schema by `gold_version` | Candidate has explicit types, `created_at`, `gold_version`, `source_snapshot_id`, and no `replace` inference | 7.1/7.3 | Not started |
 | 7.5.2 | Add staging primary keys | PK DDL/verification | All dimension keys and `fact_sales.sales_order_detail_id` have valid PKs before publish | 7.4.2/7.4.3 | Not started |
 | 7.5.3 | Add staging foreign keys | FK DDL/verification | FK creation succeeds only after orphan validation and preserves nullable salesperson semantics | 7.4.4 | Not started |
 | 7.5.4 | Verify constraints and types | Constraint inspection report | Database metadata confirms PK/FK/type contract on every candidate table | 7.5.1-7.5.3 | Not started |
@@ -238,12 +295,12 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 
 | ID | Task | Output | Acceptance criteria | Dependency | Status |
 |---|---|---|---|---|---|
-| 7.6.1 | Create run-specific staging identity | Gold staging manager integration | Published Gold is untouched during build; identifiers are validated and safe for SQL | W3/7.1 | Not started |
+| 7.6.1 | Create candidate schema identity | Gold staging/version manager integration | Published Gold is untouched during build; `gold_version` and identifiers are validated and safe for SQL | W3/7.1 | Not started |
 | 7.6.2 | Remove destructive reset from canonical flow | Refactored loader | No canonical execution drops published Gold before candidate build and validation complete | 7.6.1 | Not started |
-| 7.6.3 | Publish/swap atomically | Gold publish service integration | All Gold tables become visible as one validated version, or the previous version remains active | 7.5/7.6.1 | Not started |
+| 7.6.3 | Publish version and current pointer | `PostgresGoldPublishService` | Candidate schema is promoted and the current pointer is updated in one transaction; failure preserves the previous version | 7.5/7.6.1 | Not started |
 | 7.6.4 | Retry transient atomic units | Shared retry policy integration | Only classified transient database errors retry; retries retain run/table/batch identity | W5/7.3.6 | Not started |
 | 7.6.5 | Reconcile unknown commits | Shared reconciliation integration | Client timeout after commit is checked against staging/audit/unique key before retry | 7.6.4 | Not started |
-| 7.6.6 | Clean failed/abandoned staging | Lifecycle and retention behavior | Failed builds are not published and are marked/cleaned according to the shared staging policy | 7.6.3 | Not started |
+| 7.6.6 | Clean failed/abandoned candidates | Lifecycle and retention behavior | Failed builds are not published; candidates are retained 24-72 hours and cleanup is idempotent | 7.6.3 | Not started |
 | 7.6.7 | Record publication/version audit | Gold run/table audit | Result includes candidate version, previous version, counts, validation, constraints, publish state, and failure reason | 7.6.3 | Not started |
 
 ### 6.7 Gold regression tests
@@ -252,7 +309,7 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 |---|---|---|---|---|---|
 | 7.7.1 | Preserve builder regression tests | Existing `tests/test_sales_gold.py` coverage | Date, dimensions, fact grain, measures, nullable salesperson, and output columns remain covered | 7.2/7.3 | Not started |
 | 7.7.2 | Add job contract tests | `tests/test_gold_job.py` | Injected fakes prove table order, snapshot propagation, standard results, and no live DB requirement | 7.1 | Not started |
-| 7.7.3 | Add fact strategy tests | `tests/test_gold_fact_staging.py` | SQL path or fallback proves stable ordering, key bounds, many-to-one join, and no offset checkpoint | 7.3 | Not started |
+| 7.7.3 | Add fact strategy tests | `tests/test_gold_fact_staging.py` | Stable ordering, `(lower_bound, upper_bound]` bounds, batch identity, many-to-one join, and no offset checkpoint | 7.3 | Not started |
 | 7.7.4 | Add integrity/constraint tests | `tests/test_gold_validation.py` | Duplicate keys, null required keys, orphan references, type mismatch, and measure violations fail closed | 7.4/7.5 | Not started |
 | 7.7.5 | Add publish preservation tests | `tests/test_gold_publish.py` | Build, validation, constraint, or publish failure leaves the old Gold version unchanged | 7.6 | Not started |
 | 7.7.6 | Add retry/reconciliation tests | `tests/test_gold_retry.py` | Transient retry reuses identity; deterministic errors do not retry; unknown commit does not duplicate fact rows | 7.6.4/7.6.5 | Not started |
@@ -265,7 +322,8 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 ### 7.1 Job and compatibility
 
 - [ ] An injectable Gold job accepts settings and its database/build/validation/publish dependencies.
-- [ ] The job uses one explicit Silver snapshot/load for all candidate Gold tables.
+- [ ] The job runs only after `SilverSnapshotGate`; all six Silver targets are published and share one `source_snapshot_id`.
+- [ ] Gold results distinguish `pipeline_snapshot_id`, `source_snapshot_id`, `gold_run_id`, and `gold_load_id`.
 - [ ] Every attempted table returns the shared result contract with counts, timing, identity, error, staging, and publication fields.
 - [ ] Existing `build_dim_*`, `build_fact_sales`, and legacy `run()` callers remain functional through delegation.
 - [ ] The compatibility wrapper contains no new destructive, retry, or publication logic.
@@ -276,36 +334,38 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 - [ ] Dimension keys are non-null, unique, deterministic, and aligned with the target DDL.
 - [ ] Product builder output names and Gold schema names are reconciled and covered by a test.
 - [ ] `fact_sales` has exactly one row per `sales_order_detail_id`; duplicate keys fail closed.
-- [ ] Fact processing uses SQL-side staging or a stable `sales_order_detail_id` batch fallback.
+- [ ] Fact processing uses stable `sales_order_detail_id` batches with `(lower_bound, upper_bound]` bounds.
 - [ ] Fact processing does not use offset/page-number checkpoints.
 - [ ] Fact measures and data types match the approved formulas and Gold schema.
 - [ ] Missing required header/dimension references are reported as integrity failures, not silently dropped.
 
 ### 7.3 Pre-publish validation and constraints
 
-- [ ] Candidate schema, column names, types, nullability, and required metadata are validated before publication.
+- [ ] Candidate schema, column names, types, nullability, `gold_version`, `source_snapshot_id`, and required metadata are validated before publication.
 - [ ] Duplicate PKs, required NULLs, orphan references, invalid measures, and grain violations block publication.
 - [ ] Non-null salesperson references must resolve; NULL salesperson is accepted only under the documented online-order rule.
-- [ ] KPI validation runs against candidate staging before publication and enforces the approved 2% tolerance.
+- [ ] KPI validation runs against the candidate schema before the current pointer changes, uses the same `source_snapshot_id`, and enforces relative 2% tolerance; a zero baseline passes only with a zero candidate.
 - [ ] PK/FK constraints are created and verified on staging before the candidate is eligible for publish.
 - [ ] Constraint creation failure leaves published Gold unchanged.
 
 ### 7.4 Atomic publish, retry, and rerun
 
 - [ ] The canonical path never drops or replaces published Gold before candidate build and validation succeed.
+- [ ] Gold is published through a versioned schema and current pointer; consumers use stable views or pointer objects under the `gold` namespace.
 - [ ] A failed build, validation, constraint operation, or publish leaves the previous Gold version unchanged.
-- [ ] Successful publication atomically promotes the complete validated version and preserves its constraints.
+- [ ] Successful publication atomically promotes the complete validated version and updates the current pointer in one transaction.
 - [ ] Only classified transient database errors are retried.
 - [ ] Retry preserves run/table/batch identity and uses the same atomic unit.
 - [ ] Unknown commit outcomes are reconciled before another write attempt.
 - [ ] Failed or abandoned staging is marked/cleaned according to the shared lifecycle policy.
-- [ ] Rerunning the same Silver snapshot is deterministic and does not create duplicate fact rows.
+- [ ] Rerunning the same Silver snapshot creates a new `gold_run_id`, remains deterministic, does not create duplicate fact rows, and may create a new Gold version.
+- [ ] Only one Gold run is active; concurrent runs wait or are rejected according to the lock policy.
 
 ### 7.5 Observability and pipeline gate
 
 - [ ] Audit records include snapshot, run/table/batch identity, source/target, counts, attempts, validation, constraint, publish, and error outcomes.
 - [ ] Structured logs include applicable stage/table/batch/status fields without secrets or full raw payloads.
-- [ ] Gold failure or KPI validation failure prevents downstream success and is visible to the pipeline result.
+- [ ] Gold failure or KPI validation failure prevents downstream success, returns `failed_stage="gold"`, and does not roll back Bronze or Silver.
 - [ ] A machine-readable summary distinguishes dimension counts, fact counts, orphan/duplicate counts, KPI status, and publication state.
 
 ## 8. Test matrix and commands
@@ -321,14 +381,14 @@ Do not remove the destructive Gold flow until staging publication has a tested p
 | Duplicate fact key | Unit/integration | Validation fails; no silent dedup or publish |
 | Missing required reference | Unit/integration | Orphan report fails before FK/publish |
 | Nullable salesperson | Unit/integration | NULL is allowed only under explicit policy; non-null orphan fails |
-| Large fact input | Unit/integration | SQL staging or stable key batches avoid full fact read |
+| Large fact input | Unit/integration | Stable-key batches avoid full fact read and do not use offsets |
 | Stable fact ordering | Unit | Same snapshot produces same key bounds and batch identity |
 | Transient fact write failure | Unit | Same batch retries with bounded attempts and no duplicate |
 | Unknown commit | Integration | Reconciliation detects committed batch before retry |
 | Constraint failure | Integration | Old Gold remains unchanged |
 | KPI mismatch | Unit/integration | Candidate is rejected before publish |
 | Build/publish failure | Unit/integration | Existing Gold remains unchanged |
-| Successful atomic publish | Integration | Complete constrained candidate becomes published |
+| Successful atomic publish | Integration | Complete constrained candidate becomes the current Gold version through the pointer |
 | Same snapshot rerun | Integration | Deterministic output and one fact row per detail key |
 | Secret/redaction behavior | Unit | Credentials and raw payload do not appear in logs/reports |
 
@@ -361,7 +421,7 @@ Phase 4D is complete only when all applicable items below have implementation an
 
 - [ ] Gold is callable through an injectable job/service and the legacy entrypoint delegates to it.
 - [ ] Small dimensions use documented full-read behavior with explicit schema/key validation.
-- [ ] `fact_sales` uses SQL-side staging or stable key batches and preserves `sales_order_detail_id` grain.
+- [ ] `fact_sales` uses stable-key batches and preserves `sales_order_detail_id` grain.
 - [ ] Fact duplicate, orphan, null, type, measure, and KPI violations fail closed.
 - [ ] Gold candidate tables are built in run-specific staging; published Gold is untouched during the build.
 - [ ] PK/FK constraints and data types are verified on staging before publication.
@@ -380,8 +440,8 @@ Production DoD must not be inferred from the existing pandas builder tests alone
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Published Gold is dropped before build | Dashboard availability loss | Run-specific staging and atomic swap only after all validation |
-| Fact full-read causes memory pressure | Runtime failure or resource exhaustion | Prefer SQL-side join/staging; use stable key batches as fallback |
+| Published Gold is dropped before build | Dashboard availability loss | Use a versioned candidate schema and update the current pointer only after all validation |
+| Fact full-read causes memory pressure | Runtime failure or resource exhaustion | Use stable-key batches by `sales_order_detail_id`; do not use offsets |
 | Duplicate detail key is silently removed | Incorrect sales totals and grain | Treat duplicate `sales_order_detail_id` as a failed validation |
 | Orphan key is discovered only during FK creation | Late failure after destructive changes | Validate references before creating constraints or publishing |
 | `to_sql(replace)` removes constraints | Schema contract drift | Explicit staging DDL and constraint inspection |

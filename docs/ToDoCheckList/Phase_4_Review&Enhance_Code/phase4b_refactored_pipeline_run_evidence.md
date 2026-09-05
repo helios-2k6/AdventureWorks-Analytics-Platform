@@ -1,277 +1,135 @@
-# Phase 4B - Refactored Bronze Pipeline Run Evidence
+# Bronze-to-Silver Pipeline Run Evidence
 
-## 1. Run Information
+## 1. Scope and accuracy
 
-| Item | Value |
+This document describes the current application path from `main.py` through the Bronze and Silver stages. It replaces the earlier Bronze-only execution description.
+
+The current orchestration is:
+
+```text
+main.py
+  -> App.run()
+  -> PipelineRunner.run(mode="full")
+  -> health gate
+  -> platform bootstrap
+  -> BronzeToSilverPipeline.run()
+       -> Sales Bronze (5 targets)
+       -> Person Bronze (1 target)
+       -> Production Bronze (1 target)
+       -> BronzeSnapshotGate
+       -> SalesSilverJob (6 targets)
+       -> Silver identity/result validation
+  -> pipeline-level result
+```
+
+Gold is registered as a future extension but is not executed in this path. The pipeline result reports Gold as `NOT_REQUESTED`.
+
+Evidence types used below:
+
+- **Live run evidence:** the recorded execution on 2026-09-04. That run verified the five Sales Bronze tables only and must not be presented as a full seven-target Bronze-to-Silver run.
+- **Automated contract evidence:** the current test suite, including the full three-domain same-snapshot test. This verifies orchestration behavior without requiring a live database.
+
+## 2. Run information
+
+| Item | Current value |
 |---|---|
-| Run date | 2026-09-04 |
-| Repository | `A:\Workspace\DataEngineer\AdventureWorks Analytics Platform` |
-| Python environment | `.venv\Scripts\python.exe` |
 | Entry point | `main.py` |
-| Source system | SQL Server `localhost\HELIOS / AdventureWorks2012` |
+| Application adapter | `App.run()` |
+| Orchestrator | `PipelineRunner` |
+| Requested stages | `bronze`, `silver` |
+| Gold stage | `NOT_REQUESTED` |
+| Source system | SQL Server `localhost\\HELIOS / AdventureWorks2012` |
 | Warehouse | PostgreSQL `localhost:5432 / adventureworks_warehouse` |
-| Batch size | `10,000` |
-| Retry attempts | `3` |
-| Pipeline result | `ok` |
+| Python environment | `.venv\\Scripts\\python.exe` |
+| Batch size | `10,000` in the recorded configuration |
+| Retry attempts | `3` in the recorded configuration |
+| Latest automated regression | `135 passed` |
 
-## 2. Refactored Workflow
-
-### 2.1. End-to-end workflow
+## 3. End-to-end workflow
 
 ```mermaid
 flowchart TD
-  A[main.py] --> B["App.run()"]
-  B --> C["get_settings()"]
-  C --> D["ConnectionHealthService.check_all()"]
-  D --> D1[SQLServerConnector]
-  D --> D2[PostgreSQLConnector]
-  D1 --> E{Health OK?}
-  D2 --> E
-  E -->|No| Z[Return degraded result]
-  E -->|Yes| F["PlatformBootstrapJob.run()"]
-  F --> G["SalesBronzeIngestionJob.run(full)"]
-  G --> H[SalesBronzeJob]
-  H --> I["DomainBronzeJob.run()"]
-  I --> J[Create run/load identity]
-  J --> K[Create bronze_staging table identity]
-  K --> L["SalesExtractor.iter_table_batches()"]
-  L --> L1["SQL Server cursor fetchmany(batch_size)"]
-  L1 --> L2[Stable ORDER BY ordering_key]
-  L2 --> L3[Lineage and deterministic record hash]
-  L3 --> M["BronzeValidator.partition_rows()"]
-  M -->|Schema/system error| N["FAILED, no quarantine, no load"]
-  M -->|Row-level error| O[PostgresQuarantineService]
-  M -->|Valid rows| P{Rejected threshold OK?}
-  O --> P
-  P -->|No| Q["FAILED, staging not published"]
-  P -->|Yes| R[PostgresReconciliationService]
-  R -->|Matching durable batch| S[SKIP idempotent write]
-  R -->|No durable batch| T[BronzeLoader transaction]
-  T --> T1[Write valid rows to bronze_staging]
-  T1 --> T2[Write checkpoint and batch registry]
-  T2 --> T3[COMMIT or ROLLBACK]
-  T3 --> U[PostgresAuditService batch audit]
-  S --> U
-  U --> V{All batches complete?}
-  V -->|No| L
-  V -->|Yes| W["BronzeValidator.validate_staging()"]
-  W -->|Fail| X["FAILED, preserve published Bronze"]
-  W -->|Pass| Y[PostgresPublishService atomic swap]
-  Y --> Y1[Move validated table to bronze schema]
-  Y1 --> Y2[Mark publish/audit complete]
-  Y2 --> AA[Return IngestionResult]
-  N --> AB[Mark staging FAILED]
-  Q --> AB
-  X --> AB
-  AB --> AA
-  AC[StagingCleanupJob] -. scheduled lifecycle .-> AD[ACTIVE / PUBLISHED / FAILED / ABANDONED]
-  AD -. retention policy .-> AE[Expire and cleanup]
+    A[main.py] --> B[App.run]
+    B --> C[PipelineRunner.run full]
+    C --> D[ConnectionHealthService.check_all]
+    D -->|status != ok| Z1[FAILED: health]
+    D -->|status = ok| E[PlatformBootstrapJob.run]
+    E -->|status != ok| Z2[FAILED: bootstrap]
+    E -->|status = ok| F[BronzeToSilverPipeline.run]
+
+    F --> G1[SalesBronzeIngestionJob]
+    F --> G2[PersonBronzeJob]
+    F --> G3[ProductionBronzeJob]
+    G1 --> H[Combine seven Bronze target results]
+    G2 --> H
+    G3 --> H
+    H --> I[Annotate one pipeline snapshot_id]
+    I --> J[BronzeSnapshotGate]
+    J -->|missing, failed, unpublished, or mismatch| Z3[FAILED: Bronze gate]
+    J -->|all checks pass| K[SalesSilverJob]
+
+    K --> L[Load bronze.person dependency]
+    L --> M[Read six Bronze source tables in chunks]
+    M --> N[Validate, transform, quarantine, deduplicate]
+    N --> O[Validate Silver staging and required joins]
+    O -->|fail| Z4[FAILED Silver table]
+    O -->|pass| P[Publish Silver target]
+    P --> Q[Validate Silver status and snapshot identity]
+    Q -->|fail| Z5[FAILED: silver]
+    Q -->|pass| R[Pipeline SUCCESS]
+
+    Z1 --> S[App maps status to degraded]
+    Z2 --> S
+    Z3 --> S
+    Z4 --> S
+    Z5 --> S
+    R --> T[App maps status to ok]
 ```
 
-### 2.2. Component responsibilities, step by step
+## 4. Step-by-step process and result data
 
-#### Step 1 - Application entry point
+### Step 1 - Application entry point
 
-`main.py` is intentionally thin. It creates `App` and delegates execution to `App.run()`.
+`main.py` performs no extraction or transformation:
 
-```text
-main.py -> App() -> App.run()
+```python
+app = App()
+return app.run()
 ```
 
-The entry point does not contain extraction, validation, SQL, retry, or publish logic.
+`App.run()` delegates to `PipelineRunner.run(mode="full")`. It maps the runner status only at the outermost boundary:
 
-#### Step 2 - Configuration snapshot
+- runner `SUCCESS` -> application `status="ok"`
+- runner `FAILED` -> application `status="degraded"`
 
-`get_settings()` creates the typed configuration snapshot used by the application.
+The remaining runner fields are preserved in the returned dictionary.
 
-Responsibilities:
+### Step 2 - Pipeline runner creates the run contract
 
-- Read `.env` and process environment variables.
-- Parse batch and retry settings.
-- Select SQL Server and PostgreSQL connection details.
-- Keep passwords in `SecretStr` and out of safe summaries.
-- Provide the same settings instance to connectors, jobs, and repositories.
-
-The observed run used `batch_size=10000` and `retry_max_attempts=3`.
-
-#### Step 3 - Connection health gate
-
-`ConnectionHealthService.check_all()` checks both external systems before Bronze execution:
-
-- `SQLServerConnector` checks the AdventureWorks source.
-- `PostgreSQLConnector` checks the warehouse.
-- Each connector is disconnected after the check.
-
-If a connection fails, the application returns a degraded health result. In the observed run both connections returned `ok`.
-
-#### Step 4 - Platform bootstrap
-
-`PlatformBootstrapJob.run()` executes the platform bootstrap boundary and returns its status. The observed result was:
+`PipelineRunner` creates a pipeline `run_id`, records UTC start/end times, and sets:
 
 ```json
 {
-  "status": "ok",
-  "message": "bootstrap job executed"
+  "pipeline_name": "adventureworks",
+  "mode": "full",
+  "requested_stages": ["bronze", "silver"],
+  "gold": {"status": "NOT_REQUESTED"}
 }
 ```
 
-#### Step 5 - Domain routing
+The runner executes stages in this order and stops at the first failed gate:
 
-`SalesBronzeIngestionJob` is the compatibility wrapper. It delegates to `SalesBronzeJob`, which owns the five Sales `TableSpec` definitions:
+1. Health.
+2. Platform bootstrap.
+3. Bronze-to-Silver pipeline.
 
-- `Sales.SalesOrderHeader` -> `bronze.sales_order_header`
-- `Sales.SalesOrderDetail` -> `bronze.sales_order_detail`
-- `Sales.Customer` -> `bronze.customer`
-- `Sales.SalesTerritory` -> `bronze.sales_territory`
-- `Sales.SalesPerson` -> `bronze.sales_person`
+`failed_stage` is one of `health`, `bootstrap`, `silver`, or `null`. Currently, Bronze gate failures and Silver failures are returned through the Bronze-to-Silver result and are surfaced by the runner as `failed_stage="silver"`.
 
-`SalesBronzeJob` injects the production services used by the shared `DomainBronzeJob`:
+### Step 3 - Configuration and health gate
 
-- `PostgresAuditService`
-- `PostgresQuarantineService`
-- `PostgresReconciliationService`
-- `PostgresPublishService`
-- `PostgresCheckpointManager`
+`get_settings()` provides the typed configuration used by connectors, jobs, staging, retry, audit, and publish services. Safe configuration summaries must not include passwords.
 
-#### Step 6 - Run and staging identity
-
-For each table, `DomainBronzeJob` creates a logical run/load identity and a run-specific staging identity.
-
-The physical table is created in the dedicated schema:
-
-```text
-bronze_staging.<target_table>__<run_fragment>__<load_fragment>
-```
-
-PostgreSQL limits identifiers to 63 characters. Therefore, long UUID fragments are replaced by deterministic hash fragments while the complete run/load IDs remain available in audit metadata.
-
-#### Step 7 - Source extraction and batching
-
-`SalesExtractor.iter_table_batches()` reads SQL Server through a cursor.
-
-For each batch it:
-
-- Uses `fetchmany(Settings.batch_size)` instead of `fetchall()`.
-- Applies stable `ORDER BY TableSpec.ordering_key`.
-- Produces batch number, lower bound, and upper bound.
-- Adds `_source_system`, `_source_table`, `_load_date`, and `_record_hash`.
-
-This keeps source reads bounded and makes rerun identity deterministic.
-
-#### Step 8 - Row validation and quarantine
-
-`BronzeValidator.partition_rows()` separates the batch before writing:
-
-- Valid rows continue to staging.
-- A row-level primary-key error becomes a `RejectedRecord`.
-- `PostgresQuarantineService` persists rejected identity, key, hash, reason, and timestamp.
-- Raw rejected payload is not written to application logs or the rejected-record contract.
-- Missing required columns are schema errors: the batch fails closed and is not converted into quarantine rows.
-
-The cumulative rejected count is passed to batch audit, table audit, result, and rejection-threshold validation.
-
-#### Step 9 - Durable reconciliation before write
-
-`PostgresReconciliationService` checks the durable batch registry before a write:
-
-- Existing batch with the same content hash -> `SKIP`.
-- No matching batch evidence -> proceed with write/retry.
-- Existing batch with a different content hash -> fail closed to prevent source drift or duplicate data.
-
-This is the protection used after timeout or an uncertain client response.
-
-#### Step 10 - Atomic staging write and checkpoint
-
-For production loaders, `BronzeLoader.load_batch_transactionally()` uses one database transaction:
-
-```text
-BEGIN
-  write valid rows to bronze_staging
-  write checkpoint
-  write batch registry/content hash
-COMMIT
-```
-
-If any part fails, the transaction rolls back. The checkpoint cannot move ahead of committed data.
-
-#### Step 11 - Batch retry and audit
-
-`execute_with_retry()` retries only transient read/write errors. All attempts keep the same logical batch ID.
-
-After a successful commit or idempotent skip, `PostgresAuditService` records batch evidence including:
-
-- Batch identity and bounds.
-- Rows read, written, and rejected.
-- Attempt count.
-- Status and commit timestamp.
-- Content hash.
-
-Table-load and pipeline-run audit records are persisted in PostgreSQL as well.
-
-#### Step 12 - Full-table validation
-
-After all source batches complete, `BronzeValidator.validate_staging()` validates the complete candidate table:
-
-- Required columns and lineage columns.
-- Source-table lineage values.
-- Primary-key null policy.
-- Duplicate primary keys.
-- Source/target row reconciliation.
-- Rejected threshold.
-
-If validation fails, the candidate staging table is marked failed and the previous published Bronze remains unchanged.
-
-#### Step 13 - Atomic publish
-
-`PostgresPublishService` publishes only a validation-passed staging table:
-
-- Validate target and staging identifiers.
-- Verify the staging table exists.
-- Rename the current published table as a previous version when present.
-- Move the staging table from `bronze_staging` to `bronze`.
-- Rename it to the official target table.
-- Commit the swap as one PostgreSQL transaction.
-
-The observed run published all five tables successfully.
-
-#### Step 14 - Standard result
-
-`DomainBronzeJob` returns an `IngestionResult` dictionary for each table. The result contains identity, status, row counts, rejected count, attempts, timestamps, error information, staging name, validation report, and publish state.
-
-The application combines health, bootstrap, and Bronze results into the final application status.
-
-#### Step 15 - Cleanup lifecycle
-
-`StagingCleanupJob` is the lifecycle cleanup component. It is designed to run as a scheduled operational job:
-
-- `ACTIVE`: retain while the run is active.
-- `PUBLISHED`: remove after audit completion.
-- `FAILED` or `ABANDONED`: retain for 24 hours.
-- After retention: expire and remove the staging object.
-
-The observed pipeline run completed the publish path. Cleanup policy is independently tested with an injected evaluation time, so retention tests do not require waiting 24 hours.
-
-## 3. Step-by-Step Output
-
-### Step 1 - Settings
-
-```text
-environment: development
-debug: false
-log_level: INFO
-sql_server_host: localhost\HELIOS
-sql_server_database: AdventureWorks2012
-sql_server_auth_mode: windows
-postgres_host: localhost
-postgres_port: 5432
-postgres_database: adventureworks_warehouse
-batch_size: 10000
-retry_max_attempts: 3
-```
-
-Passwords are not included in the output. `Settings.safe_summary()` is used for the displayed configuration.
-
-### Step 2 - Connection Health
+`ConnectionHealthService.check_all()` checks both systems and disconnects each connector in a `finally` block. Its result shape is:
 
 ```json
 {
@@ -291,7 +149,11 @@ Passwords are not included in the output. `Settings.safe_summary()` is used for 
 }
 ```
 
-### Step 3 - Bootstrap
+If the overall status is not `ok`, Bootstrap and Bronze/Silver are not called. The runner returns `status="FAILED"` and `failed_stage="health"`.
+
+### Step 4 - Platform bootstrap
+
+After health succeeds, `PlatformBootstrapJob.run()` is called. The recorded run returned:
 
 ```json
 {
@@ -300,83 +162,369 @@ Passwords are not included in the output. `Settings.safe_summary()` is used for 
 }
 ```
 
-### Step 4 - Bronze Pipeline
+Any non-`ok` result stops the pipeline and produces `failed_stage="bootstrap"`.
 
-All five Sales Bronze tables completed successfully. Source and target counts matched, validation passed, and each staging result was published.
+### Step 5 - Bronze domain routing
 
-| Target table | Source rows | Target rows | Rejected | Attempts | Validation | Published |
-|---|---:|---:|---:|---:|---|---|
-| `sales_order_header` | 31,465 | 31,465 | 0 | 1 | `true` | `true` |
-| `sales_order_detail` | 121,317 | 121,317 | 0 | 1 | `true` | `true` |
-| `customer` | 19,820 | 19,820 | 0 | 1 | `true` | `true` |
-| `sales_territory` | 10 | 10 | 0 | 1 | `true` | `true` |
-| `sales_person` | 17 | 17 | 0 | 1 | `true` | `true` |
-| **Total** | **162,629** | **162,629** | **0** |  |  |  |
+`BronzeToSilverPipeline` runs three domain jobs in the configured order:
 
-Example physical staging identifier from the run:
+| Domain job | Required target(s) |
+|---|---|
+| `SalesBronzeIngestionJob` | `bronze.sales_order_header`, `bronze.sales_order_detail`, `bronze.customer`, `bronze.sales_territory`, `bronze.sales_person` |
+| `PersonBronzeJob` | `bronze.person` |
+| `ProductionBronzeJob` | `bronze.product` |
+
+All three jobs use the shared `DomainBronzeJob` mechanics. The individual domain jobs return mappings of target name to an ingestion result. The pipeline merges those mappings before applying the snapshot gate.
+
+### Step 6 - Bronze table execution
+
+For each Bronze table, `DomainBronzeJob.run()` performs the following:
+
+1. Resolve or create the table `run_id` and `load_id`.
+2. Create a run/load-specific staging table in `bronze_staging`.
+3. Record run audit states.
+4. Read source rows in ordered batches using the extractor.
+5. Validate each batch and split valid rows from rejected rows.
+6. Persist rejected records without writing raw rejected payloads to logs.
+7. Check durable batch evidence for idempotent reconciliation.
+8. Write valid rows, checkpoint, and batch registry transactionally.
+9. Retry only according to the configured retry policy.
+10. Validate the complete staging table.
+11. Publish the validated table atomically to the `bronze` schema.
+
+The staging name follows the implementation contract:
 
 ```text
-bronze_staging.sales_order_header__id_6abc684bbbeb7f2f__id_437f0d18bcb98177
+bronze_staging.<target_table>__<run_fragment>__<load_fragment>
 ```
 
-The run/load UUID fragments are shortened with deterministic hash fragments when required to stay within PostgreSQL's 63-character identifier limit. Full run/load identity remains available in audit metadata.
+Long identifiers use deterministic fragments to fit PostgreSQL's 63-character identifier limit. Full UUID identities remain in result and audit metadata.
 
-### Step 5 - Application Result
+A successful Bronze table result contains fields such as:
 
 ```json
 {
-  "status": "ok",
-  "health": "ok",
-  "bootstrap": "ok",
-  "bronze_ok": true
+  "stage": "bronze",
+  "source_table": "Sales.SalesOrderHeader",
+  "target_table": "sales_order_header",
+  "status": "SUCCESS",
+  "run_id": "<table-run-id>",
+  "load_id": "<table-load-id>",
+  "rows_read": 31465,
+  "rows_written": 31465,
+  "rows_rejected": 0,
+  "attempt_count": 1,
+  "published": true,
+  "staging_name": "bronze_staging.<...>",
+  "validation_report": {"validation_passed": true}
 }
 ```
 
-## 4. Production Behaviors Verified
+The exact fields are returned by the shared `IngestionResult` contract; row counts vary by source data and execution date.
 
-- SQL Server and PostgreSQL connectivity passed.
-- Bronze reads source data with cursor batching and stable ordering.
-- Valid rows are written to run-specific tables in `bronze_staging`.
-- Row-level rejected records are isolated and persisted through `PostgresQuarantineService`.
-- Pipeline, table-load, and batch-load audit records are persisted in PostgreSQL.
-- Checkpoint and batch registry writes use the transaction-aware loader boundary.
-- Full-table validation runs before publication.
-- PostgreSQL atomic publish moves validated staging into the published `bronze` schema.
-- Retry is limited to transient failures.
-- Database reconciliation checks durable batch evidence before retry.
-- Failed or abandoned staging follows the cleanup retention lifecycle.
-- Connector error logs exclude passwords and raw exception payloads.
+### Step 7 - Bronze failure behavior
 
-## 5. Validation Evidence
+Bronze does not proceed to Silver when any required target is missing, unsuccessful, unpublished, or invalid. Examples include:
 
-### Full regression
+- schema/system validation failure;
+- rejected row threshold exceeded;
+- failed staging validation;
+- failed atomic publish;
+- missing source `run_id` or `load_id`.
+
+The gate result includes:
+
+```json
+{
+  "status": "FAILED",
+  "snapshot_id": "<pipeline-snapshot-id>",
+  "required_targets": ["..."],
+  "failures": ["..."],
+  "table_count": 7
+}
+```
+
+Silver is not called when this gate fails.
+
+### Step 8 - One Bronze snapshot gate
+
+After all domain results are merged, the pipeline creates one `snapshot_id`. Existing target snapshot identities are preserved; missing identities are annotated with the pipeline snapshot. This prevents an old snapshot identity from being silently overwritten.
+
+`BronzeSnapshotGate` requires all seven targets:
+
+```text
+bronze.sales_order_header
+bronze.sales_order_detail
+bronze.customer
+bronze.sales_territory
+bronze.sales_person
+bronze.product
+bronze.person
+```
+
+For every target, it requires:
+
+- status `SUCCESS` or `SUCCESS_WITH_REJECTIONS`;
+- `published == true`;
+- non-empty source `run_id` and `load_id`;
+- a snapshot identity equal to the pipeline `snapshot_id`.
+
+The full-domain automated test verifies that Sales, Person, and Production results combine into all seven targets and that every target has the same snapshot before Silver is called.
+
+### Step 9 - Silver dependency loading
+
+`SalesSilverJob` transforms six Bronze sources:
+
+| Bronze source | Silver target |
+|---|---|
+| `bronze.sales_order_header` | `silver.sales_order_header_clean` |
+| `bronze.sales_order_detail` | `silver.sales_order_detail_clean` |
+| `bronze.customer` | `silver.customer_clean` |
+| `bronze.sales_territory` | `silver.sales_territory_clean` |
+| `bronze.product` | `silver.product_clean` |
+| `bronze.sales_person` | `silver.sales_person_clean` |
+
+`bronze.person` is not itself a Silver output table, but it is a required dependency for the `sales_person` transformation. Silver loads it before processing the six output tables and joins Person name attributes into `sales_person_clean`. Missing or incomplete Person data fails closed.
+
+### Step 10 - Silver ordered chunk processing
+
+For each Silver source, the job:
+
+1. Reads the published Bronze table in ordered chunks using `batch_size`.
+2. Adds `run_id`, `load_id`, `batch_id`, and `_record_hash` lineage.
+3. Validates required input columns.
+4. Converts dates, numeric, integer, and required string fields.
+5. Persists conversion rejections through the Silver quarantine service.
+6. Stops the table if the rejection threshold is exceeded.
+7. Applies the table-specific cleaner.
+8. Reconciles and commits each transformed batch to Silver staging.
+9. Marks checkpoints only after the staged batch commit succeeds.
+
+The six table execution order is:
+
+```text
+sales_order_header
+sales_order_detail
+customer
+sales_territory
+product
+sales_person
+```
+
+### Step 11 - Silver validation and deduplication
+
+Before publication, Silver applies:
+
+- detail-grain duplicate validation for `sales_order_detail`;
+- global primary-key deduplication using deterministic ordering;
+- required output column validation;
+- unexpected-column rejection;
+- non-null primary-key validation;
+- numeric output type validation;
+- `sales_person` Person-join validation;
+- rejected-row threshold validation.
+
+The validation report includes fields such as:
+
+```json
+{
+  "validation_passed": true,
+  "schema_ok": true,
+  "primary_key_nulls": 0,
+  "duplicate_primary_keys": 0,
+  "required_joins_ok": true,
+  "rejected_threshold_ok": true,
+  "source_count": 100,
+  "target_count": 100,
+  "rejected_count": 0,
+  "issues": []
+}
+```
+
+Counts in this example are illustrative. Production counts must come from the actual run result.
+
+### Step 12 - Silver publish and table result
+
+Only a validation-passed staging table is published. Depending on the configuration, publication uses the injected publish service or the default Silver writer, then marks the staging lifecycle as published.
+
+A successful table result has the following shape:
+
+```json
+{
+  "stage": "silver",
+  "source_table": "sales_order_header",
+  "target_table": "sales_order_header_clean",
+  "status": "SUCCESS",
+  "run_id": "<pipeline-snapshot-id>",
+  "load_id": "<pipeline-snapshot-id>",
+  "rows_read": 31465,
+  "rows_valid": 31465,
+  "rows_rejected": 0,
+  "rows_deduplicated": 0,
+  "rows_published": 31465,
+  "published": true,
+  "published_target": "sales_order_header_clean",
+  "validation_report": {"validation_passed": true}
+}
+```
+
+The status may be `SUCCESS_WITH_REJECTIONS` when rejected rows remain within policy. Any failed Silver table causes the overall Bronze-to-Silver result to be `FAILED`.
+
+### Step 13 - Silver identity gate
+
+After `SalesSilverJob.run()` returns, `BronzeToSilverPipeline` checks every Silver table result. Each result must have:
+
+- an allowed status: `SUCCESS` or `SUCCESS_WITH_REJECTIONS`;
+- `run_id == snapshot_id`;
+- `load_id == snapshot_id`.
+
+An identity mismatch prevents a successful pipeline result, even if the table status is otherwise `SUCCESS`.
+
+The pipeline result contains:
+
+```json
+{
+  "status": "SUCCESS",
+  "snapshot_id": "<one-id>",
+  "recovery": false,
+  "bronze_gate": {"status": "SUCCESS"},
+  "silver_identity": {
+    "status": "SUCCESS",
+    "snapshot_id": "<one-id>",
+    "failures": [],
+    "table_count": 6
+  },
+  "silver": {"<six silver results>": "..."}
+}
+```
+
+### Step 14 - Pipeline-level result returned by App
+
+`PipelineRunner` flattens the Bronze-to-Silver result into the application contract. A successful result has this shape:
+
+```json
+{
+  "run_id": "<pipeline-run-id>",
+  "pipeline_name": "adventureworks",
+  "mode": "full",
+  "requested_stages": ["bronze", "silver"],
+  "status": "SUCCESS",
+  "started_at": "<UTC ISO timestamp>",
+  "finished_at": "<UTC ISO timestamp>",
+  "duration_ms": 0,
+  "failed_stage": null,
+  "health": {"status": "ok", "connections": ["..."]},
+  "bootstrap": {"status": "ok", "message": "..."},
+  "bronze": {"<seven bronze results>": "..."},
+  "bronze_gate": {"status": "SUCCESS", "table_count": 7},
+  "snapshot_id": "<one-id>",
+  "silver": {"<six silver results>": "..."},
+  "gold": {"status": "NOT_REQUESTED"},
+  "report_paths": []
+}
+```
+
+`App.run()` returns the same fields with the outer status mapped to `ok`. There is no current `bronze_ok` field in the implementation; the old short-form example containing `bronze_ok` has therefore been removed.
+
+## 5. Recovery and failure paths
+
+### Health failure
+
+```text
+health != ok
+  -> bootstrap not called
+  -> Bronze not called
+  -> failed_stage = health
+  -> App status = degraded
+```
+
+### Bootstrap failure
+
+```text
+health ok
+  -> bootstrap != ok
+  -> Bronze/Silver not called
+  -> failed_stage = bootstrap
+  -> App status = degraded
+```
+
+### Bronze snapshot failure
+
+```text
+one required Bronze target missing/failed/unpublished/mismatched
+  -> Silver not called
+  -> bronze_gate.status = FAILED
+  -> failed_stage = silver
+  -> App status = degraded
+```
+
+### Silver failure or identity mismatch
+
+```text
+Bronze gate succeeds
+  -> Silver table fails or identity does not match snapshot_id
+  -> silver_identity.status = FAILED when applicable
+  -> failed_stage = silver
+  -> App status = degraded
+```
+
+### Recovery snapshot
+
+When `recovery_snapshot` is supplied, Bronze execution is skipped. The provided `snapshot_id` and Bronze result mapping are validated, then Silver is called with that same identity. An invalid recovery snapshot fails before Silver with a failed Bronze gate result.
+
+## 6. Evidence and validation status
+
+### Automated evidence
+
+The current repository-local environment was used:
 
 ```powershell
 cd "A:\Workspace\DataEngineer\AdventureWorks Analytics Platform"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Result:
+Latest result after the orchestration and same-snapshot coverage updates:
 
 ```text
-90 passed in 58.06s
+135 passed in 69.96s
 ```
 
-### Additional integration evidence
+The focused Bronze-to-Silver tests include:
 
-| Area | Test result |
-|---|---:|
-| PostgreSQL atomic publish and reconciliation | 3 passed |
-| Persistent audit and rejected records | 2 passed |
-| Dedicated `bronze_staging` schema | 1 passed |
-| Transactional checkpoint commit/rollback | 2 passed |
-| Log redaction and settings safety | 9 passed |
-| W4.6.5 cleanup lifecycle | 19 passed |
+- Bronze failure blocks Silver;
+- missing required Bronze target is rejected;
+- snapshot identity mismatch blocks Silver;
+- default pipeline includes `PersonBronzeJob`;
+- Sales, Person, and Production combine into one complete seven-target Bronze snapshot;
+- Silver receives the same snapshot identity through `run_id` and `load_id`;
+- Silver identity mismatch fails the pipeline.
 
-`git diff --check` passed and diagnostics reported no errors for the changed runtime files.
+### Live execution evidence
 
-## 6. Note
+The recorded 2026-09-04 run used the local `.venv` and reached a successful application result for the refactored Sales Bronze path. It verified:
 
-The pipeline run emitted a pandas `FutureWarning` about concatenation behavior with empty or all-NA entries. The warning did not affect the result: all five Bronze tables completed with status `SUCCESS`, validation passed, and publication completed.
+- SQL Server and PostgreSQL connectivity;
+- five Sales Bronze tables;
+- source/target row-count equality for those five tables;
+- validation and publication for those five tables;
+- batch, audit, checkpoint, reconciliation, retry, and cleanup behavior.
 
-This document is an execution snapshot for the refactored Bronze workflow as of 2026-09-04.
+That run reported:
+
+| Target | Source rows | Target rows | Rejected | Attempts | Published |
+|---|---:|---:|---:|---:|---|
+| `sales_order_header` | 31,465 | 31,465 | 0 | 1 | true |
+| `sales_order_detail` | 121,317 | 121,317 | 0 | 1 | true |
+| `customer` | 19,820 | 19,820 | 0 | 1 | true |
+| `sales_territory` | 10 | 10 | 0 | 1 | true |
+| `sales_person` | 17 | 17 | 0 | 1 | true |
+| **Total** | **162,629** | **162,629** | **0** |  |  |
+
+It did not provide live result data for `bronze.person`, `bronze.product`, or the six Silver tables. Therefore this document does not claim that the full seven-target Bronze-to-Silver production run has been completed.
+
+## 7. Operational notes
+
+- A pandas `FutureWarning` about concatenation with empty/all-NA entries was observed in the earlier live run. It did not change that run's reported results, but it remains a maintenance item.
+- `StagingCleanupJob` is a scheduled lifecycle component. Published staging is eligible for cleanup after audit completion; failed or abandoned staging is retained for the configured retention period.
+- Gold is intentionally disabled/not requested until its production contract and gate are enabled.
+- Live full-pipeline evidence should be appended here only after one run records all seven Bronze targets, the Bronze gate, all six Silver targets, Silver identity validation, and the final pipeline-level result.

@@ -114,7 +114,7 @@ class BronzeToSilverPipeline:
             if isinstance(result, dict):
                 annotated[target] = {
                     **result,
-                    "snapshot_id": snapshot_id,
+                    "snapshot_id": result.get("snapshot_id", snapshot_id),
                     "source_run_id": result.get("run_id"),
                     "source_load_id": result.get("load_id"),
                 }
